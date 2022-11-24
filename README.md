@@ -25,6 +25,7 @@ xdg-open http://127.0.0.1:2857
 ``` text
 $ ./go-webring -h
 Usage of ./go-webring
+  -c, --contact string   Contact instructions for errors (default "contact the admin and let them know what's up")
   -i, --index string     Path to home page template (default "index.html")
   -l, --listen string    Host and port go-webring will listen on (default "127.0.0.1:2857")
   -m, --members string   Path to list of webring members (default "list.txt")
