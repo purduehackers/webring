@@ -54,7 +54,7 @@ func (m model) next(writer http.ResponseWriter, request *http.Request) {
 				log.Println("Checking '" + dest + "'")
 				if is200(dest) {
 					log.Println("Redirecting visitor to '" + dest + "'")
-					http.Redirect(writer, request, dest, 302)
+					http.Redirect(writer, request, dest, http.StatusFound)
 					success = true
 					break
 				}
@@ -66,7 +66,7 @@ please `+*flagContactString, 500)
 		}
 	}
 	if !success {
-		http.Error(writer, "Ring member '"+host+"' not found.", 404)
+		http.Error(writer, "Ring member '"+host+"' not found.", http.StatusNotFound)
 	}
 }
 
@@ -88,7 +88,7 @@ func (m model) previous(writer http.ResponseWriter, request *http.Request) {
 				dest := scheme + m.ring[i].url
 				if is200(dest) {
 					log.Println("Redirecting visitor to '" + dest + "'")
-					http.Redirect(writer, request, dest, 302)
+					http.Redirect(writer, request, dest, http.StatusFound)
 					return
 				}
 			}
@@ -97,7 +97,7 @@ func (m model) previous(writer http.ResponseWriter, request *http.Request) {
 				dest := scheme + m.ring[i].url
 				if is200(dest) {
 					log.Println("Redirecting visitor to '" + dest + "'")
-					http.Redirect(writer, request, dest, 302)
+					http.Redirect(writer, request, dest, http.StatusFound)
 					return
 				}
 			}
@@ -107,7 +107,7 @@ please `+*flagContactString, 500)
 			return
 		}
 	}
-	http.Error(writer, "Ring member '"+host+"' not found.", 404)
+	http.Error(writer, "Ring member '"+host+"' not found.", http.StatusNotFound)
 }
 
 // Redirects the visitor to a random member
