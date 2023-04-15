@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2021 Amolith <amolith@secluded.site>
+// SPDX-FileCopyrightText: Amolith <amolith@secluded.site>
 //
 // SPDX-License-Identifier: BSD-2-Clause
 
