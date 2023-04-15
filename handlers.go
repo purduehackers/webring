@@ -29,7 +29,11 @@ func (m model) root(writer http.ResponseWriter, request *http.Request) {
 		table = table + "    <td>" + link(member.url) + "</td>\n"
 		table = table + "  </tr>\n"
 	}
-	m.index.Execute(writer, template.HTML(table))
+	err := m.index.Execute(writer, template.HTML(table))
+	if err != nil {
+		log.Println("Error executing template: " + err.Error())
+		http.Error(writer, "Internal server error", 500)
+	}
 }
 
 // Redirects the visitor to the next member, wrapping around the list if the
@@ -61,7 +65,7 @@ func (m model) next(writer http.ResponseWriter, request *http.Request) {
 please `+*flagContactString, 500)
 		}
 	}
-	if success == false {
+	if !success {
 		http.Error(writer, "Ring member '"+host+"' not found.", 404)
 	}
 }
@@ -104,7 +108,6 @@ please `+*flagContactString, 500)
 		}
 	}
 	http.Error(writer, "Ring member '"+host+"' not found.", 404)
-	return
 }
 
 // Redirects the visitor to a random member

@@ -62,20 +62,14 @@ func (m *model) modify(a string) bool {
 			log.Fatalln(err)
 		}
 		curRingModTime := ringStat.ModTime().Unix()
-		if m.ringModTime < curRingModTime {
-			return true
-		}
-		return false
+		return m.ringModTime < curRingModTime
 	} else if a == "index" {
 		indexStat, err := os.Stat(*flagIndex)
 		if err != nil {
 			log.Fatalln(err)
 		}
 		curIndexModTime := indexStat.ModTime().Unix()
-		if m.indexModTime < curIndexModTime {
-			return true
-		}
-		return false
+		return m.indexModTime < curIndexModTime
 	} else {
 		log.Fatalln("Please call modify() with argument of either \"index\" or \"ring\"")
 	}
