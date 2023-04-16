@@ -97,8 +97,8 @@ following.
 bob bobssite.com
 ```
 
-If the user was `sam` and her site was `https://sometilde/~sam`, her line would
-look like this:
+If the user was `sam` and her site was `https://sometilde.com/~sam`, her line
+would look like this:
 
 ``` text
 sam sometilde.com/~sam
