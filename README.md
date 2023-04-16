@@ -101,7 +101,7 @@ If the user was `sam` and her site was `https://sometilde/~sam`, her line would
 look like this:
 
 ``` text
-sam sometilde/~sam
+sam sometilde.com/~sam
 ```
 
 With those two members in the text file, the HTML inserted into the home page
