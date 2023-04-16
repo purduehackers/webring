@@ -85,8 +85,6 @@ func (m *model) validateMembers() {
 
 	report += "====== END VALIDATION REPORT FOR " + today + " ======\n\n"
 
-	fmt.Println(report)
-
 	if errors {
 		// Write the report to the beginning of the validation log
 		f, err := os.OpenFile(*flagValidationLog, os.O_RDWR, 0o644)
