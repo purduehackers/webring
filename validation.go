@@ -26,7 +26,7 @@ func (m *model) validateMembers() {
 	for _, r := range m.ring {
 		errorMember := false
 		reportMember := ""
-		resp, err := follow("https://" + r.url)
+		resp, err := http.Get("https://" + r.url)
 		if err != nil {
 			fmt.Println("Error checking", r.handle, "at", r.url, ":", err)
 			reportMember += "  - Error with site: " + err.Error() + "\n"
@@ -116,16 +116,4 @@ func (m *model) validateMembers() {
 		}
 		fmt.Println("Validation report for " + today + " written")
 	}
-}
-
-// Recursively follows redirects until it finds a non-redirect response
-func follow(url string) (*http.Response, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusSeeOther || resp.StatusCode == http.StatusTemporaryRedirect || resp.StatusCode == http.StatusPermanentRedirect {
-		return follow(resp.Header.Get("Location"))
-	}
-	return resp, nil
 }
