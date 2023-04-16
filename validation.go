@@ -15,7 +15,7 @@ import (
 )
 
 // Loops through the list of members, checks whether they're up or down, whether
-// they contain the requisite fediring links, and appends any errors to the
+// they contain the requisite webring links, and appends any errors to the
 // user-provided validation log
 func (m *model) validateMembers() {
 	// Get today's date with hours, minutes, and seconds
@@ -56,9 +56,9 @@ func (m *model) validateMembers() {
 		}
 
 		requiredLinks := []string{
-			"https://fediring.net/next?host=" + url.QueryEscape(r.url),
-			"https://fediring.net/previous?host=" + url.QueryEscape(r.url),
-			"https://fediring.net",
+			"https://" + *flagHost + "/next?host=" + url.QueryEscape(r.url),
+			"https://" + *flagHost + "/previous?host=" + url.QueryEscape(r.url),
+			"https://" + *flagHost,
 		}
 
 		for _, link := range requiredLinks {

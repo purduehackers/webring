@@ -34,6 +34,7 @@ var (
 	flagIndex         *string = flag.StringP("index", "i", "index.html", "Path to home page template")
 	flagContactString *string = flag.StringP("contact", "c", "contact the admin and let them know what's up", "Contact instructions for errors")
 	flagValidationLog *string = flag.StringP("validationlog", "v", "validation.log", "Path to validation log, see docs for requirements")
+	flagHost          *string = flag.StringP("host", "h", "", "Host this webring runs on, primarily used for validation")
 )
 
 func main() {
@@ -87,6 +88,9 @@ func main() {
 func (m *model) init() {
 	flag.Parse()
 	log.Println("Listening on", *flagListen)
+	if *flagHost == "" {
+		log.Fatalln("Host flag is required")
+	}
 	log.Println("Looking for members in", *flagMembers)
 	m.parseList()
 	log.Println("Found", len(m.ring), "members")

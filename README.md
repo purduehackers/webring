@@ -25,10 +25,11 @@ xdg-open http://127.0.0.1:2857
 ``` text
 $ ./go-webring -h
 Usage of ./go-webring
-  -c, --contact string   Contact instructions for errors (default "contact the admin and let them know what's up")
-  -i, --index string     Path to home page template (default "index.html")
-  -l, --listen string    Host and port go-webring will listen on (default "127.0.0.1:2857")
-  -m, --members string   Path to list of webring members (default "list.txt")
+  -c, --contact string         Contact instructions for errors (default "contact the admin and let them know what's up")
+  -i, --index string           Path to home page template (default "index.html")
+  -l, --listen string          Host and port go-webring will listen on (default "127.0.0.1:2857")
+  -m, --members string         Path to list of webring members (default "list.txt")
+  -v, --validationlog string   Path to validation log, see docs for requirements (default "validation.log")
 ```
 
 This webring implementation handles four paths:
@@ -37,6 +38,10 @@ This webring implementation handles four paths:
 - **Next:** returns a 302 redirect pointing to the next site in the list
 - **Previous:** returns a 302 redirect pointing to the previous site in the list
 - **Random:** returns a 302 redirect pointing to a random site in the list
+- **\$validationlog:** displays the validation log at the path specified in the
+  command line flags
+  - For example, with `-v validationlog`, the path would be
+    `example.com/validationlog`
 
 The **next** and **previous** paths require a `?host=` parameter containing a
 URL-encoded URI of the site being visited. For example, if Sam is a member of a
@@ -124,6 +129,15 @@ browsers interpret the parameter correctly.
 - `https://example.com/next?host=sometilde.com%2F~sam`
 - `https://example.com/previous?host=sometilde.com%2F~sam`
 
+
+## Validation
+
+At startup, a concurrent process spins off, checks every member's site for
+issues, generates a report, and serves the report at the location specified in
+the command line flag. It rechecks sites every 24 hours and identifies TLS
+errors, unreachable sites, and sites with missing links. It will eventually
+follow redirects too, allowing members to move their site without having to
+notify ring maintainers.
 
 ## Questions & Contributions
 Questions, comments, and patches can always be sent to my public inbox, but I'm
