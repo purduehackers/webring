@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: CC0-1.0
 
-# Big HTML webpage generated with pandoc
 index.html
+validation.log
 
 # Build directory
 /out/
