@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -20,7 +21,35 @@ import (
 func (m *model) validateMembers() {
 	// Get today's date with hours, minutes, and seconds
 	today := time.Now().Format("2006-01-02")
+
+	// Check the log header to see if we've already validated today
+	logFile, err := os.Open(*flagValidationLog)
+	if err != nil {
+		fmt.Println("Error opening validation log:", err)
+		logFile.Close()
+		return
+	}
+
+	// Only read the most recent header, which is always 65 bytes long
+	logHeader, err := ioutil.ReadAll(io.LimitReader(logFile, 65))
+	if err != nil {
+		fmt.Println("Error reading validation log:", err)
+		logFile.Close()
+		return
+	}
+
+	if strings.Contains(string(logHeader), today) {
+		logFile.Close()
+		return
+	}
+
+	// Close the file so it's not locked while we're checking the members
+	logFile.Close()
+
+	// If any errors were found, write a report to the validation log
 	errors := false
+
+	// Start the report with a header
 	report := "===== BEGIN VALIDATION REPORT FOR " + today + " =====\n"
 
 	for _, r := range m.ring {
@@ -80,7 +109,6 @@ func (m *model) validateMembers() {
 			report += "- " + r.handle + " needs to fix the following issues on " + r.url + ":\n"
 			report += reportMember
 		}
-
 	}
 
 	report += "====== END VALIDATION REPORT FOR " + today + " ======\n\n"
