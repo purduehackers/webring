@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: Amolith <amolith@secluded.site>
+#
+# SPDX-License-Identifier: CC0-1.0
+
+[run]
+concurrency            =  8
+timeout                =  "30m"
+issues-exit-code       =  1
+tests                  =  true
+skip-dirs              =  ["frontend"]
+modules-download-mode  =  "readonly"
+go                     =  ""
+
+[output]
+print-issued-lines  =  false
+print-linter-name   =  true
+uniq-by-line        =  false
+path-prefix         =  ""
+sort-results        =  true
+
+[issues]
+max-issues-per-linter  =  0
+max-same-issues        =  0
+new                    =  false
+fix                    =  false
+
+[linters]
+fast    =  false
+eeable  =  [
+        "asasalint",
+        "asciicheck",
+        "bidichk",
+        "bodyclose",
+        "contextcheck",
+        "durationcheck",
+        "errcheck",
+        "errname",
+        "errorlint",
+        "exportloopref",
+        "gocritic",
+        "godot",
+        "gofumpt",
+        "goimports",
+        "gomoddirectives",
+        "gosec",
+        "gosimple",
+        "govet",
+        "ineffassign",
+        "misspell",
+        "nakedret",
+        "nilerr",
+        "nilnil",
+        "noctx",
+        "nolintlint",
+        "prealloc",
+        "predeclared",
+        "promlinter",
+        "reassign",
+        "revive",
+        "rowserrcheck",
+        "sqlclosecheck",
+        "stylecheck",
+        "tagliatelle",
+        "tenv",
+        "testableexamples",
+        "thelper",
+        "tparallel",
+        "unconvert",
+        "unparam",
+        "unused",
+        "usestdlibvars",
+        "wastedassign",
+        "containedctx",
+        "cyclop",
+        "decorder",
+        "depguard",
+        "dogsled",
+        "dupl",
+        "dupword",
+        "errchkjson",
+        "execinquery",
+        "exhaustive",
+        "exhaustruct",
+        "forcetypeassert",
+        "funlen",
+        "gci",
+        "gocheckcompilerdirectives",
+        "gocognit",
+        "gocyclo",
+        "godox",
+        "goerr113",
+        "gomnd",
+        "gomodguard",
+        "goprintffuncname",
+        "grouper",
+        "importas",
+        "interfacebloat",
+        "ireturn",
+        "lll",
+        "loggercheck",
+        "maintidx",
+        "makezero",
+        "musttag",
+        "nestif",
+        "nonamedreturns",
+        "nosprintfhostport",
+        "paralleltest",
+        "testpackage",
+        "typecheck",
+        "varnamelen",
+        "whitespace",
+        "wrapcheck",
+        "wsl"
+]
