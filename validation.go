@@ -29,7 +29,7 @@ func (m *model) validateMembers() {
 		resp, err := follow("https://" + r.url)
 		if err != nil {
 			fmt.Println("Error checking", r.handle, "at", r.url, ":", err)
-			reportMember += "  - The site is down: " + err.Error() + "\n"
+			reportMember += "  - Error with site: " + err.Error() + "\n"
 			if !errors {
 				errors = true
 			}
