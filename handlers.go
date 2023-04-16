@@ -118,5 +118,11 @@ func (m model) random(writer http.ResponseWriter, request *http.Request) {
 	}
 	rand.Seed(time.Now().Unix())
 	dest := "https://" + m.ring[rand.Intn(len(m.ring)-1)].url
-	http.Redirect(writer, request, dest, 302)
+	http.Redirect(writer, request, dest, http.StatusFound)
+}
+
+// Serves the log at *flagValidationLog
+func (m model) validationLog(writer http.ResponseWriter, request *http.Request) {
+	http.Header.Add(writer.Header(), "Content-Type", "text/plain")
+	http.ServeFile(writer, request, *flagValidationLog)
 }
