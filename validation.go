@@ -126,9 +126,7 @@ func follow(url string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("Status code for", url, ":", resp.StatusCode)
 	if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusSeeOther || resp.StatusCode == http.StatusTemporaryRedirect || resp.StatusCode == http.StatusPermanentRedirect {
-		fmt.Println("Following redirect to", resp.Header.Get("Location"))
 		return follow(resp.Header.Get("Location"))
 	}
 	return resp, nil
