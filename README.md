@@ -80,12 +80,15 @@ $ ./go-webring
 
 To run your own webring, you'll first need a template homepage. This should be
 any HTML file with the string "`{{ . }}`" placed wherever you want the table of
-members inserted. This table is plain HTML so you can style it with CSS in the
-template's `<head>` or in a separate `.css` file.
+members inserted. This table is plain HTML so you can style it with CSS.
 
 Pandoc produces very pleasing (in my opinion) standalone HTML pages; if you just
 want something simple, I would recommend modifying the included `index.md` and
 generating your homepage as in section above.
+
+To serve other assets, such as styles in a separate `.css` file, images, etc.,
+place them in the `static/` directory; a file at `static/favicon.ico` will be
+accessible at `https://example.com/static/favicon.ico`.
 
 Next, you'll need a text file containing a list of members. On each line should
 be the member's unique identifer (such as their username) followed by a single

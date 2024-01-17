@@ -78,6 +78,9 @@ func main() {
 	mux.HandleFunc("/random", m.random)
 	mux.HandleFunc("/"+*flagValidationLog, m.validationLog)
 
+	fileHandler := http.StripPrefix("/static/", http.FileServer(http.Dir("static")))
+	mux.Handle("/static/", fileHandler)
+
 	if err := httpServer.ListenAndServe(); err == http.ErrServerClosed {
 		log.Println("Web server closed")
 	} else {
