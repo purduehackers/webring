@@ -156,6 +156,8 @@ this project's goal, I encourage you to fork the repo and make whatever changes
 you like!
 
 - Email: [~amolith/public-inbox@lists.sr.ht][email]
+  - Please run the following before submitting a patch via email:  
+  `git config format.subjectPrefix "PATCH go-webring"`
 - IRC: [irc.nixnet.services/#secluded][irc]
 - XMPP: [secluded@muc.secluded.site][xmpp]
 
