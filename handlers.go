@@ -84,7 +84,7 @@ func (m model) previous(writer http.ResponseWriter, request *http.Request) {
 	for index, item := range m.ring {
 		if item.url == host {
 			// from here to start of list
-			for i := index - 1; i > 0; i-- {
+			for i := index - 1; i >= 0; i-- {
 				dest := scheme + m.ring[i].url
 				if is200(dest) {
 					log.Println("Redirecting visitor to '" + dest + "'")
