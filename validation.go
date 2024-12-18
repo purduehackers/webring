@@ -6,8 +6,8 @@ package main
 
 import (
 	"fmt"
+	"html"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,7 +31,7 @@ func (m *model) validateMembers() {
 	}
 
 	// Only read the most recent header, which is always 65 bytes long
-	logHeader, err := ioutil.ReadAll(io.LimitReader(logFile, 65))
+	logHeader, err := io.ReadAll(io.LimitReader(logFile, 65))
 	if err != nil {
 		fmt.Println("Error reading validation log:", err)
 		logFile.Close()
@@ -78,7 +78,7 @@ func (m *model) validateMembers() {
 		}
 
 		// Read the response body into a string
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			fmt.Println("Error reading webpage body:", err)
 			continue
@@ -90,8 +90,9 @@ func (m *model) validateMembers() {
 			"https://" + *flagHost,
 		}
 
+		decodedBody := html.UnescapeString(string(body));
 		for _, link := range requiredLinks {
-			if !strings.Contains(string(body), link) {
+			if !strings.Contains(decodedBody, link) {
 				reportMember += "  - Site is missing " + link + "\n"
 				if err != nil {
 					fmt.Println("Error writing to validation log:", err)
@@ -122,7 +123,7 @@ func (m *model) validateMembers() {
 		}
 		defer f.Close()
 
-		logContents, err := ioutil.ReadAll(f)
+		logContents, err := io.ReadAll(f)
 		if err != nil {
 			fmt.Println("Error reading validation log:", err)
 			return
