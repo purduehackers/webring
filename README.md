@@ -5,20 +5,12 @@ SPDX-License-Identifier: CC0-1.0
 -->
 
 # go-webring
-[![REUSE status][reuse-shield]][reuse]
-[![Donate with fosspay][fosspay-shield]][fosspay]
-![Time spent on project][wakapi-shield]
 
-Simple webring implementation created for the [Fediring](https://fediring.net/)
+Fork of [go-webring][upstream] customized for the [Purdue
+Hackers][https://purduehackers.com] [webring][https://ring.purduehackers.com].
 
-``` shell
-git clone https://git.sr.ht/~amolith/go-webring
-cd go-webring
-pandoc -s index.md -o index.html
-go build
-./go-webring
-xdg-open http://127.0.0.1:2857
-```
+Fork-specific features:
+- Notify site owners via Discord when their webring links are broken/missing.
 
 ## Usage
 
@@ -165,33 +157,10 @@ you want to send the pings. Once this is done, place the webhook URL in a file
 and specify the path to this file using the command-line options.
 
 ## Questions & Contributions
-Questions, comments, and patches can always be sent to my public inbox, but I'm
-also in my IRC channel/XMPP room pretty much 24/7. However, I might not see
-messages right away because I'm working on something else (or sleeping) so
-please stick around!
+For the upstream go-webring project, [see here][upstream].
 
-If you're wanting to introduce a new feature and I don't feel like it fits with
-this project's goal, I encourage you to fork the repo and make whatever changes
-you like!
+If you have questions/comments/suggestions about this project, feel free to open
+an issue or pull request at <https://github.com/kdkasad/go-webring>.
 
-- Email: [~amolith/public-inbox@lists.sr.ht][email]
-  - Please run the following before submitting a patch via email:  
-  `git config format.subjectPrefix "PATCH go-webring"`
-- IRC: [irc.nixnet.services/#secluded][irc]
-- XMPP: [secluded@muc.secluded.site][xmpp]
+[upstream]: https://git.sr.ht/~amolith/go-webring
 
-*If you haven't used mailing lists before, please take a look at [SourceHut's
-documentation](https://man.sr.ht/lists.sr.ht/), especially the etiquette
-section.*
-
-[reuse]: https://api.reuse.software/info/git.sr.ht/~amolith/go-webring
-[reuse-shield]: https://shields.io/reuse/compliance/git.sr.ht/~amolith/go-webring
-
-[fosspay]: https://secluded.site/donate/
-[fosspay-shield]: https://shields.io/badge/donate-fosspay-yellow
-
-[wakapi-shield]: https://img.shields.io/endpoint?url=https://waka.secluded.site/api/compat/shields/v1/amolith/interval:any/project:go-webring&color=blue&label=time%20spent
-
-[email]: mailto:~amolith/public-inbox@lists.sr.ht
-[irc]: irc://irc.nixnet.services/#secluded
-[xmpp]: xmpp:secluded@muc.secluded.site?join
