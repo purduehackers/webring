@@ -1,5 +1,6 @@
 <!--
-SPDX-FileCopyrightText: Amolith <amolith@secluded.site>
+Copyright Amolith <amolith@secluded.site>
+Copyright (C) 2024 Kian Kasad <kian@kasad.com>
 
 SPDX-License-Identifier: CC0-1.0
 -->
@@ -7,7 +8,7 @@ SPDX-License-Identifier: CC0-1.0
 # go-webring
 
 Fork of [go-webring][upstream] customized for the [Purdue
-Hackers][https://purduehackers.com] [webring][https://ring.purduehackers.com].
+Hackers](https://purduehackers.com) [webring](https://ring.purduehackers.com).
 
 Fork-specific features:
 - Notify site owners via Discord when their webring links are broken/missing.
