@@ -7,6 +7,27 @@
 		<title>Purdue Hackers Webring</title>
 
 		<style>
+		#bgcover {
+			z-index: -1000;
+			position: fixed;
+			top: 0;
+			left: 0;
+			height: 100vh;
+			width: 100vw;
+			background: linear-gradient(to right,
+				#fafafa80,
+				#fafafad0 calc(50% - 200px),
+				#fafafad0 calc(50% + 200px),
+				#fafafa80
+			), url("/static/PurdueHackers.svg") repeat;
+			background-size: cover, 70px;
+			background-blend: lighten;
+		}
+		@media not (prefers-reduced-motion) {
+			#bgcover {
+				animation: lv 150000s linear infinite;
+			}
+		}
 		body {
 			position: relative;
 			margin: 0 auto;
@@ -14,8 +35,7 @@
 			line-height: 1.6;
 			font-size: 18px;
 			color: #383838;
-			background-color: #fafafa;
-			padding: 40px 10px 200px 10px;
+			padding: 60px 24px 200px 24px;
 			font-family: "Verdana", "Helvetica", sans-serif;
 			min-height: 100vh;
 			box-sizing: border-box;
@@ -42,11 +62,19 @@
 			font-size: 14px;
 			text-align: center;
 		}
+		@keyframes lv {
+			0% {
+				background-position: 0 0, 0 0;
+			}
+			100% {
+				background-position: 0 0, 4000000px 4000000px;
+			}
+		}
 		</style>
 	</head>
 
 	<body>
-		<h1>Purdue Hackers Web Ring</h1>
+		<h1> Purdue Hackers Web Ring </h1>
 
 		<p>
 			This is a <a href="https://en.wikipedia.org/wiki/Webring">web ring</a>
@@ -72,13 +100,14 @@
 				{{ . }}
 			</tbody>
 		</table>
+
+		<footer>
+			Style inspired by
+			<a href="http://bettermotherfuckingwebsite.com">http://bettermotherfuckingwebsite.com</a>.
+		</footer>
+
+		<div id="bgcover"></div>
 	</body>
-
-	<footer>
-		Style inspired by
-		<a href="http://bettermotherfuckingwebsite.com">http://bettermotherfuckingwebsite.com</a>.
-	</footer>
-
 </html>
 
 <!-- vim: set noet : -->
