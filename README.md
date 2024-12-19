@@ -91,20 +91,23 @@ place them in the `static/` directory; a file at `static/favicon.ico` will be
 accessible at `https://example.com/static/favicon.ico`.
 
 Next, you'll need a text file containing a list of members. On each line should
-be the member's unique identifer (such as their username) followed by a single
-space followed by their site's URI omitting the scheme. For example, if a user
-is `bob` and his site is `https://bobssite.com`, his line would look like the
-following.
+be the member's unique identifer (such as their username), their Discord user
+ID, and their site's URI omitting the scheme, each separated by a space. For
+example, if a user is `bob` and his site is `https://bobssite.com`, his line
+would look like the following.
 
 ``` text
-bob bobssite.com
+bob 123456789123456789 bobssite.com
 ```
+
+See the [Discord notifications](#discord-notifications) section for details on
+the format of the Discord user ID column.
 
 If the user was `sam` and her site was `https://sometilde.com/~sam`, her line
 would look like this:
 
 ``` text
-sam sometilde.com/~sam
+sam - sometilde.com/~sam
 ```
 
 With those two members in the text file, the HTML inserted into the home page
@@ -144,6 +147,22 @@ follow redirects too, allowing members to move their site without having to
 notify ring maintainers.
 
 There are some false positives right now, but I'm working on correcting those.
+
+### Discord notifications
+
+When a problem is found with a site, a ping can be sent to the Discord user
+associated with the site. To enable this, enter the Discord user ID to ping as
+the second column of an entry in the member list file.
+
+Note that the user ID is different from the username.
+[See here for how to find your user ID.](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID)
+
+To disable notifications for a user, enter a single hyphen as their user ID.
+The example of the user `sam` above shows this.
+
+Finally, you'll need to create a Discord webhook for the server/channel in which
+you want to send the pings. Once this is done, place the webhook URL in a file
+and specify the path to this file using the command-line options.
 
 ## Questions & Contributions
 Questions, comments, and patches can always be sent to my public inbox, but I'm

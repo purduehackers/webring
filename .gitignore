@@ -7,3 +7,5 @@ validation.log
 
 # Build directory
 /out/
+
+go-webring

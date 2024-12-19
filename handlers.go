@@ -29,6 +29,7 @@ func (m model) root(writer http.ResponseWriter, request *http.Request) {
 		table = table + "    <td>" + link(member.url) + "</td>\n"
 		table = table + "  </tr>\n"
 	}
+	writer.Header().Add("Content-Type", "text/html")
 	err := m.index.Execute(writer, template.HTML(table))
 	if err != nil {
 		log.Println("Error executing template: " + err.Error())

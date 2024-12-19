@@ -5,9 +5,12 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -49,66 +52,61 @@ func (m *model) validateMembers() {
 	// If any errors were found, write a report to the validation log
 	errors := false
 
+	// Count the numbers of notifications dispatched so we can print a log
+	// message
+	notifsSent := 0
+
 	// Start the report with a header
 	report := "===== BEGIN VALIDATION REPORT FOR " + today + " =====\n"
 
-	for _, r := range m.ring {
-		errorMember := false
-		reportMember := ""
-		resp, err := http.Get("https://" + r.url)
+	for _, site := range m.ring {
+		siteReportHeader := "- " + site.handle + " needs to fix the following issues on " + site.url + ":\n"
+		issues := make([]string, 0)
+		resp, err := http.Get("https://" + site.url)
 		if err != nil {
-			fmt.Println("Error checking", r.handle, "at", r.url, ":", err)
-			reportMember += "  - Error with site: " + err.Error() + "\n"
-			if !errors {
-				errors = true
-			}
-			report += "- " + r.handle + " needs to fix the following issues on " + r.url + ":\n"
-			report += reportMember
+			fmt.Println("Error checking", site.handle, "at", site.url, ":", err)
+			issues = append(issues, "Error with site: " + err.Error())
+			report += siteReportHeader
+			report += formatIssues(issues)
 			continue
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			reportMember += "  - Site is not returning a 200 OK\n"
-			if !errors {
-				errors = true
-			}
-			report += "- " + r.handle + " needs to fix the following issues on " + r.url + ":\n"
-			report += reportMember
+			issues = append(issues, "Site is not returning a 200 OK")
+			report += siteReportHeader
+			report += formatIssues(issues)
+			resp.Body.Close()
 			continue
 		}
 
 		// Read the response body into a string
 		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			fmt.Println("Error reading webpage body:", err)
 			continue
 		}
 
 		requiredLinks := []string{
-			"https://" + *flagHost + "/next?host=" + url.QueryEscape(r.url),
-			"https://" + *flagHost + "/previous?host=" + url.QueryEscape(r.url),
+			"https://" + *flagHost + "/next?host=" + url.QueryEscape(site.url),
+			"https://" + *flagHost + "/previous?host=" + url.QueryEscape(site.url),
 			"https://" + *flagHost,
 		}
 
 		decodedBody := html.UnescapeString(string(body));
 		for _, link := range requiredLinks {
 			if !strings.Contains(decodedBody, link) {
-				reportMember += "  - Site is missing " + link + "\n"
-				if err != nil {
-					fmt.Println("Error writing to validation log:", err)
-					continue
-				}
-				if !errors {
-					errors = true
-				}
-				if !errorMember {
-					errorMember = true
-				}
+				issues = append(issues, "Site is missing " + link)
 			}
 		}
-		if errorMember {
-			report += "- " + r.handle + " needs to fix the following issues on " + r.url + ":\n"
-			report += reportMember
+		if len(issues) > 0 {
+			report += siteReportHeader
+			report += formatIssues(issues)
+			if site.discordUserId != "-" {
+				go notifyUser(site, issues)
+				notifsSent += 1
+			}
+			errors = true
 		}
 	}
 
@@ -143,6 +141,52 @@ func (m *model) validateMembers() {
 			fmt.Println("Error writing to validation log:", err)
 			return
 		}
-		fmt.Println("Validation report for " + today + " written")
+		log.Printf("Validation report for %s written", today)
+		log.Printf("%d notifications dispatched", notifsSent)
+	}
+}
+
+func formatIssues(issues []string) string {
+	result := ""
+	for _, issue := range issues {
+		result += "  - "
+		result += issue
+		result += "\n"
+	}
+	return result
+}
+
+// Send a ping to the Discord user ID associated with the given site informing
+// them of the given issues.
+func notifyUser(site ring, issues []string) {
+	issuesText := ""
+	for _, issue := range issues {
+		issuesText += "- "
+		issuesText += issue
+		issuesText += "\n"
+	}
+	// https://discord.com/developers/docs/resources/webhook#execute-webhook
+	payload := map[string]interface{} {
+		"content": fmt.Sprintf("<@%s>, please fix the following issues with your site's webring integration:\n%s", site.discordUserId, issuesText),
+		"allowed_mentions": map[string]interface{} {
+			"users": []string {site.discordUserId},
+		},
+	}
+	payloadJson, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Println("Error encoding JSON for Discord webhook request", err)
+		return
+	}
+
+	resp, err := http.Post(*gDiscordUrl, "application/json", bytes.NewReader(payloadJson))
+	if err != nil {
+		fmt.Println("Error sending Discord webhook request", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		fmt.Println("Discord webhook returned status", resp.Status)
+		return
 	}
 }

@@ -16,8 +16,9 @@ import (
 )
 
 type ring struct {
-	handle string
-	url    string
+	handle        string
+	discordUserId string
+	url           string
 }
 
 type model struct {
@@ -29,12 +30,15 @@ type model struct {
 
 // Pre-define all of our flags
 var (
-	flagListen        *string = flag.StringP("listen", "l", "127.0.0.1:2857", "Host and port go-webring will listen on")
-	flagMembers       *string = flag.StringP("members", "m", "list.txt", "Path to list of webring members")
-	flagIndex         *string = flag.StringP("index", "i", "index.html", "Path to home page template")
-	flagContactString *string = flag.StringP("contact", "c", "contact the admin and let them know what's up", "Contact instructions for errors")
-	flagValidationLog *string = flag.StringP("validationlog", "v", "validation.log", "Path to validation log, see docs for requirements")
-	flagHost          *string = flag.StringP("host", "H", "", "Host this webring runs on, primarily used for validation")
+	flagListen         *string = flag.StringP("listen", "l", "127.0.0.1:2857", "Host and port go-webring will listen on")
+	flagMembers        *string = flag.StringP("members", "m", "list.txt", "Path to list of webring members")
+	flagIndex          *string = flag.StringP("index", "i", "index.html", "Path to home page template")
+	flagContactString  *string = flag.StringP("contact", "c", "contact the admin and let them know what's up", "Contact instructions for errors")
+	flagValidationLog  *string = flag.StringP("validationlog", "v", "validation.log", "Path to validation log, see docs for requirements")
+	flagHost           *string = flag.StringP("host", "H", "", "Host this webring runs on, primarily used for validation")
+	flagDiscordUrlFile *string = flag.StringP("discord-url-file", "d", "discord-webhook-url.txt", "Path to file containing Discord webhook URL")
+
+	gDiscordUrl        *string = nil // Will be read from flagDiscordUrlFile
 )
 
 func main() {
@@ -88,12 +92,23 @@ func main() {
 	}
 }
 
+func loadDiscordUrl() {
+	discordUrlBytes, err := os.ReadFile(*flagDiscordUrlFile)
+	if err != nil {
+		log.Fatalln("Failed to read URL from file")
+	}
+	discordUrlString := strings.TrimSpace(string(discordUrlBytes))
+	gDiscordUrl = &discordUrlString
+}
+
 func (m *model) init() {
 	flag.Parse()
 	log.Println("Listening on", *flagListen)
 	if *flagHost == "" {
 		log.Fatalln("Host flag is required")
 	}
+	log.Println("Looking for Discord webhook URL in", *flagDiscordUrlFile)
+	loadDiscordUrl()
 	log.Println("Looking for members in", *flagMembers)
 	m.parseList()
 	log.Println("Found", len(m.ring), "members")
