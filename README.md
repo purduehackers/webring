@@ -154,7 +154,10 @@ The example of the user `sam` above shows this.
 
 Finally, you'll need to create a Discord webhook for the server/channel in which
 you want to send the pings. Once this is done, place the webhook URL in a file
-and specify the path to this file using the command-line options.
+and specify the path to this file using the command-line options. You can also
+[specify a specific thread using query parameters in the URL][thread-param].
+
+[thread-param]: https://discord.com/developers/docs/resources/webhook#execute-webhook-query-string-params
 
 ## Questions & Contributions
 For the upstream go-webring project, [see here][upstream].
