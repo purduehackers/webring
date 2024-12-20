@@ -96,7 +96,7 @@ func (m *model) validateMembers() {
 		decodedBody := html.UnescapeString(string(body));
 		for _, link := range requiredLinks {
 			if !strings.Contains(decodedBody, link) {
-				issues = append(issues, "Site is missing " + link)
+				issues = append(issues, fmt.Sprintf("Site is missing <%s>", link))
 			}
 		}
 		if len(issues) > 0 {
