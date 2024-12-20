@@ -166,11 +166,13 @@ func notifyUser(site ring, issues []string) {
 		issuesText += "\n"
 	}
 	// https://discord.com/developers/docs/resources/webhook#execute-webhook
+	const SUPPRESS_EMBEDS int = 1 << 2
 	payload := map[string]interface{} {
 		"content": fmt.Sprintf("<@%s>, please fix the following issues with your site's webring integration:\n%s", site.discordUserId, issuesText),
 		"allowed_mentions": map[string]interface{} {
 			"users": []string {site.discordUserId},
 		},
+		"flags": SUPPRESS_EMBEDS,
 	}
 	payloadJson, err := json.Marshal(payload)
 	if err != nil {
