@@ -1,0 +1,77 @@
+#bgcover {
+    z-index: -1000;
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 100vw;
+    background-image: url("/static/PurdueHackers.svg");
+    background-size: 70px;
+    opacity: 40%;
+}
+@media not (prefers-reduced-motion) {
+    #bgcover {
+        animation: lv 150000s linear infinite;
+    }
+}
+body {
+    position: relative;
+    margin: 0 auto;
+    max-width: 650px;
+    line-height: 1.6;
+    font-size: 18px;
+    color: #383838;
+    padding: 60px 24px 200px 24px;
+    font-family: "Verdana", "Helvetica", sans-serif;
+    min-height: 100vh;
+    box-sizing: border-box;
+}
+h1, h2, h3 {
+    line-height: 1.2;
+    letter-spacing: -1pt;
+}
+th, td {
+    text-align: left;
+    padding-right: 24px;
+    min-width: 100px;
+}
+td {
+    font-family: monospace;
+}
+footer {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 3em;
+    font-size: 14px;
+    text-align: center;
+}
+
+@keyframes lv {
+    0% {
+        background-position: 0 0;
+    }
+    100% {
+        background-position: 4000000px 4000000px;
+    }
+}
+
+@media (prefers-color-scheme: dark) {
+    html {
+        background-color: #282828;
+    }
+    body {
+        color: #ddd;
+    }
+    #bgcover {
+        opacity: 12%;
+    }
+    a {
+        color: #abcdef;
+    }
+    a:visited {
+        color: #d2abef;
+    }
+}
