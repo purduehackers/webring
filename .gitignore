@@ -8,3 +8,5 @@ validation.log
 /out/
 
 go-webring
+
+/gomod2nix-template
