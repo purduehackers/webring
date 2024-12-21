@@ -22,4 +22,4 @@ jobs:
 
       - name: Deploy with SSH
         run: |
-          ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o PubkeyAuthentication=yes -o IdentityFile=~/hackerring-deploy caf5@vulcan.moe -P 4225
+          ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o PubkeyAuthentication=yes -o IdentityFile=~/hackerring-deploy -o Port=4225 caf5@vulcan.moe
