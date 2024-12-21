@@ -16,7 +16,10 @@ jobs:
         run: |
           umask 077
           mkdir -p ~/.ssh
-          echo ${{ secrets.SSH_PRIVATE_KEY }} > ~/.ssh/id_ed25519
+          cat << EOF > ~/.ssh/id_ed25519
+          ${{ secrets.SSH_PRIVATE_KEY }}
+          EOF
+
 
       - name: Deploy with SSH
         run: |
