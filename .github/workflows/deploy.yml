@@ -1,0 +1,23 @@
+name: Deploy to Vulcan
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    name: Deploy to Vulcan
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Setup SSH
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          echo ${{ secrets.SSH_PRIVATE_KEY }} > ~/.ssh/id_ed25519
+
+      - name: Deploy with SSH
+        run: |
+          ssh -o StrictHostKeyChecking=no caf5@vulcan.moe -P 4225
