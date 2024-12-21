@@ -15,7 +15,7 @@ jobs:
       - name: Setup SSH
         run: |
           umask 077
-          cat << EOF > ~/id_ed25519
+          cat << EOF > ~/hackerring-deploy
           ${{ secrets.SSH_PRIVATE_KEY }}
           EOF
 
