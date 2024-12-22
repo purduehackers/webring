@@ -87,18 +87,45 @@ func (m *model) validateMembers() {
 			continue
 		}
 
+		// Make sure the base link is last, since that's a substring of the
+		// other two links, and we're tracking the match positions.
 		requiredLinks := []string{
 			"https://" + *flagHost + "/next?host=" + url.QueryEscape(site.url),
 			"https://" + *flagHost + "/previous?host=" + url.QueryEscape(site.url),
 			"https://" + *flagHost,
 		}
-
-		decodedBody := html.UnescapeString(string(body));
-		for _, link := range requiredLinks {
-			if !strings.Contains(decodedBody, link) {
+		foundPositions := make([]int, len(requiredLinks))
+		decodedBody := html.UnescapeString(string(body))
+		for i, link := range requiredLinks {
+			found := false
+			offsetPos := 0
+			for {
+				pos := strings.Index(decodedBody[offsetPos:], link)
+				if pos == -1 {
+					break
+				}
+				// Check if this position has already been used
+				absolutePos := offsetPos + pos
+				positionUsed := false
+				for _, usedPos := range foundPositions[:i] {
+					if usedPos == absolutePos {
+						positionUsed = true
+						break
+					}
+				}
+				if !positionUsed {
+					foundPositions[i] = absolutePos
+					found = true
+					break
+				}
+				// Continue searching from after this match
+				offsetPos += pos + len(link)
+			}
+			if !found {
 				issues = append(issues, fmt.Sprintf("Site is missing <%s>", link))
 			}
 		}
+
 		if len(issues) > 0 {
 			report += siteReportHeader
 			report += formatIssues(issues)
