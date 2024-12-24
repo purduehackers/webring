@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,7 +29,7 @@ func (m *model) validateMembers() {
 	// Check the log header to see if we've already validated today
 	logFile, err := os.Open(*flagValidationLog)
 	if err != nil {
-		fmt.Println("Error opening validation log:", err)
+		slog.Error("Error opening validation log", "error", err)
 		logFile.Close()
 		return
 	}
@@ -37,7 +37,7 @@ func (m *model) validateMembers() {
 	// Only read the most recent header, which is always 65 bytes long
 	logHeader, err := io.ReadAll(io.LimitReader(logFile, 65))
 	if err != nil {
-		fmt.Println("Error reading validation log:", err)
+		slog.Error("Error reading validation log", "error", err)
 		logFile.Close()
 		return
 	}
@@ -65,7 +65,7 @@ func (m *model) validateMembers() {
 		issues := make([]string, 0)
 		resp, err := http.Get("https://" + site.url)
 		if err != nil {
-			fmt.Println("Error checking", site.handle, "at", site.url, ":", err)
+			slog.Error("Error fetching site", "user", site.handle, "url", site.url, "error", err)
 			issues = append(issues, "Error with site: " + err.Error())
 			report += siteReportHeader
 			report += formatIssues(issues)
@@ -84,7 +84,7 @@ func (m *model) validateMembers() {
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			fmt.Println("Error reading webpage body:", err)
+			slog.Error("Error reading webpage body", "error", err)
 			continue
 		}
 
@@ -144,33 +144,32 @@ func (m *model) validateMembers() {
 		// Write the report to the beginning of the validation log
 		f, err := os.OpenFile(*flagValidationLog, os.O_RDWR, 0o644)
 		if err != nil {
-			fmt.Println("Error opening validation log:", err)
+			slog.Error("Error opening validation log", "error", err)
 			return
 		}
 		defer f.Close()
 
 		logContents, err := io.ReadAll(f)
 		if err != nil {
-			fmt.Println("Error reading validation log:", err)
+			slog.Error("Error reading validation log", "error", err)
 			return
 		}
 
 		if _, err := f.Seek(0, 0); err != nil {
-			fmt.Println("Error seeking to beginning of validation log:", err)
+			slog.Error("Error seeking to beginning of validation log", "error", err)
 			return
 		}
 
 		if _, err := f.Write([]byte(report)); err != nil {
-			fmt.Println("Error writing to validation log:", err)
+			slog.Error("Error writing to validation log", "error", err)
 			return
 		}
 
 		if _, err := f.Write(logContents); err != nil {
-			fmt.Println("Error writing to validation log:", err)
+			slog.Error("Error writing to validation log", "error", err)
 			return
 		}
-		log.Printf("Validation report for %s written", today)
-		log.Printf("%d notifications dispatched", notifsSent)
+		slog.Info("Validation report written", "date", today, "notifs_dispatched", notifsSent)
 	}
 }
 
@@ -193,6 +192,10 @@ func notifyUser(site ring, issues []string) {
 		issuesText += issue
 		issuesText += "\n"
 	}
+
+	// Logger which includes user info
+	logger := slog.With(slog.Group("site", "user", site.handle, "discordId", site.discordUserId))
+
 	// https://discord.com/developers/docs/resources/webhook#execute-webhook
 	const SUPPRESS_EMBEDS int = 1 << 2
 	payload := map[string]interface{} {
@@ -204,36 +207,46 @@ func notifyUser(site ring, issues []string) {
 	}
 	payloadJson, err := json.Marshal(payload)
 	if err != nil {
-		fmt.Println("Error encoding JSON for Discord webhook request", err)
+		logger.Error("Error creating JSON payload", "error", err)
 		return
 	}
 
 	for {
 		resp, err := http.Post(*gDiscordUrl, "application/json", bytes.NewReader(payloadJson))
 		if err != nil {
-			fmt.Println("Error sending Discord webhook request:", err)
+			logger.Error("Error sending Discord webhook request", "error", err)
 			return
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
 
 		if resp.StatusCode == 429 {
 			// We hit a rate limit. Wait according to the Retry-After header and try again.
 			retryAfter := resp.Header.Get("Retry-After")
 			if retryAfter == "" {
-				fmt.Println("Discord rate limit exceeded. Cannot try again.")
+				logger.Error("Discord rate limit exceeded with no Retry-After header in response.")
 				return
 			}
 			waitSeconds, err := strconv.ParseInt(retryAfter, 10, 64)
 			if err != nil {
-				fmt.Println("Discord rate limit response malformed: Retry-After header could not be parsed:", err)
+				logger.Error("Invalid Retry-After header in response", "header", "Retry-After: " + retryAfter)
 				return
 			}
-			log.Printf("Discord rate limit exceeded. Waiting %d seconds and trying again.", waitSeconds)
+			logger.Warn("Discord rate limit exceeded", "retry_after_seconds", waitSeconds)
 			time.Sleep(time.Duration(waitSeconds) * time.Second)
 		} else if resp.StatusCode < 200 || resp.StatusCode > 299 {
-			fmt.Println("Discord webhook returned status", resp.Status)
+			logger.Error("Discord webhook returned non-2xx status", "code", resp.StatusCode, "status", resp.Status)
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				logger.Error("Failed to read reponse body", "error", err)
+			} else {
+				logger.Debug("Discord webhook interaction failed",
+					slog.Group("request", "body", payloadJson),
+					slog.Group("response", "code", resp.StatusCode, "content_type",
+						resp.Header.Get("Content-Type"), "body", string(body)))
+			}
 			return
 		} else {
+			// 2xx response
 			break
 		}
 	}

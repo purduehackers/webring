@@ -7,7 +7,7 @@ package main
 import (
 	"html/template"
 	"io/ioutil"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -23,12 +23,14 @@ func (m *model) parseIndex() {
 	m.index = nil
 	tmpl, err := template.ParseFiles(*flagIndex)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("Error parsing index template", "file", *flagIndex, "error", err)
+		os.Exit(1)
 	}
 	m.index = tmpl
 	tmplStat, err := os.Stat(*flagIndex)
 	if err != nil {
-		log.Fatalln(err)
+		slog.Error("Error getting file metadata", "file", *flagIndex, "error", err)
+		os.Exit(1)
 	}
 	m.indexModTime = tmplStat.ModTime().Unix()
 }
@@ -39,7 +41,7 @@ func (m *model) parseList() {
 	m.ring = nil
 	file, err := ioutil.ReadFile(*flagMembers)
 	if err != nil {
-		log.Fatal("Error while loading list of webring members: ", err)
+		slog.Error("Error loading webring member list", "error", err)
 	}
 	lines := strings.Split(string(file), "\n")
 	for _, line := range lines[:len(lines)-1] {
@@ -48,7 +50,8 @@ func (m *model) parseList() {
 	}
 	fileStat, err := os.Stat(*flagMembers)
 	if err != nil {
-		log.Fatalln(err)
+		slog.Error("Error getting file metadata", "file", *flagIndex, "error", err)
+		os.Exit(1)
 	}
 	m.ringModTime = fileStat.ModTime().Unix()
 }
@@ -59,19 +62,22 @@ func (m *model) modify(a string) bool {
 	if a == "ring" {
 		ringStat, err := os.Stat(*flagMembers)
 		if err != nil {
-			log.Fatalln(err)
+			slog.Error("Error getting file metadata", "file", *flagIndex, "error", err)
+			os.Exit(1)
 		}
 		curRingModTime := ringStat.ModTime().Unix()
 		return m.ringModTime < curRingModTime
 	} else if a == "index" {
 		indexStat, err := os.Stat(*flagIndex)
 		if err != nil {
-			log.Fatalln(err)
+			slog.Error("Error getting file metadata", "file", *flagIndex, "error", err)
+			os.Exit(1)
 		}
 		curIndexModTime := indexStat.ModTime().Unix()
 		return m.indexModTime < curIndexModTime
 	} else {
-		log.Fatalln("Please call modify() with argument of either \"index\" or \"ring\"")
+		slog.Error("modify() called with invalid argument", "arg", a)
+		os.Exit(1)
 	}
 	return true
 }
@@ -79,7 +85,7 @@ func (m *model) modify(a string) bool {
 func is200(site string) bool {
 	resp, err := http.Get(site)
 	if err != nil {
-		log.Println(err)
+		slog.Error("HTTP request failed", "site", site, "error", err)
 		return false
 	}
 	if resp.StatusCode == http.StatusOK {

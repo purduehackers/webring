@@ -6,7 +6,7 @@ package main
 
 import (
 	"html/template"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -42,6 +42,9 @@ var (
 )
 
 func main() {
+	logger := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+	slog.SetDefault(slog.New(logger))
+
 	m := model{}
 	m.init()
 
@@ -50,15 +53,17 @@ func main() {
 	// Ensure log file for member validation is in the current working
 	// directory,
 	if strings.HasPrefix(*flagValidationLog, "/") || strings.HasPrefix(*flagValidationLog, "..") {
-		log.Fatalln("Validation log file must be in the current working directory")
+		slog.Error("Validation log file must be in the current working directory")
+		os.Exit(1)
 	}
 
 	// Ensure log file exists and if not, create it
 	if _, err := os.Stat(*flagValidationLog); os.IsNotExist(err) {
-		log.Println("Validation log file does not exist, creating")
+		slog.Info("Validation log file does not exist; creating it")
 		f, err := os.Create(*flagValidationLog)
 		if err != nil {
-			log.Fatalln("Error creating validation log file:", err)
+			slog.Error("Error creating validation log file", "error", err)
+			os.Exit(1)
 		}
 		f.Close()
 	}
@@ -86,16 +91,17 @@ func main() {
 	mux.Handle("/static/", fileHandler)
 
 	if err := httpServer.ListenAndServe(); err == http.ErrServerClosed {
-		log.Println("Web server closed")
+		slog.Info("Web server closed")
 	} else {
-		log.Fatalln(err)
+		slog.Error("Web server error", "error", err)
 	}
 }
 
 func loadDiscordUrl() {
 	discordUrlBytes, err := os.ReadFile(*flagDiscordUrlFile)
 	if err != nil {
-		log.Fatalln("Failed to read URL from file")
+		slog.Error("Failed to read URL from file", "error", err)
+		os.Exit(1)
 	}
 	discordUrlString := strings.TrimSpace(string(discordUrlBytes))
 	gDiscordUrl = &discordUrlString
@@ -103,15 +109,16 @@ func loadDiscordUrl() {
 
 func (m *model) init() {
 	flag.Parse()
-	log.Println("Listening on", *flagListen)
 	if *flagHost == "" {
-		log.Fatalln("Host flag is required")
+		slog.Error("Host flag is required")
+		os.Exit(1)
 	}
-	log.Println("Looking for Discord webhook URL in", *flagDiscordUrlFile)
+	slog.Info("Listening", "address", *flagListen)
+	slog.Info("Loading Discord webhook URL", "file", *flagDiscordUrlFile)
 	loadDiscordUrl()
-	log.Println("Looking for members in", *flagMembers)
+	slog.Info("Loading members", "file", *flagMembers)
 	m.parseList()
-	log.Println("Found", len(m.ring), "members")
-	log.Println("Building homepage with", *flagIndex)
+	slog.Info("Loaded members", "member_count", len(m.ring))
+	slog.Info("Building homepage", "file", *flagIndex)
 	m.parseIndex()
 }
