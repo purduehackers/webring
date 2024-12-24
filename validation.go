@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -207,15 +208,33 @@ func notifyUser(site ring, issues []string) {
 		return
 	}
 
-	resp, err := http.Post(*gDiscordUrl, "application/json", bytes.NewReader(payloadJson))
-	if err != nil {
-		fmt.Println("Error sending Discord webhook request", err)
-		return
-	}
-	defer resp.Body.Close()
+	for {
+		resp, err := http.Post(*gDiscordUrl, "application/json", bytes.NewReader(payloadJson))
+		if err != nil {
+			fmt.Println("Error sending Discord webhook request:", err)
+			return
+		}
+		resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		fmt.Println("Discord webhook returned status", resp.Status)
-		return
+		if resp.StatusCode == 429 {
+			// We hit a rate limit. Wait according to the Retry-After header and try again.
+			retryAfter := resp.Header.Get("Retry-After")
+			if retryAfter == "" {
+				fmt.Println("Discord rate limit exceeded. Cannot try again.")
+				return
+			}
+			waitSeconds, err := strconv.ParseInt(retryAfter, 10, 64)
+			if err != nil {
+				fmt.Println("Discord rate limit response malformed: Retry-After header could not be parsed:", err)
+				return
+			}
+			log.Printf("Discord rate limit exceeded. Waiting %d seconds and trying again.", waitSeconds)
+			time.Sleep(time.Duration(waitSeconds) * time.Second)
+		} else if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			fmt.Println("Discord webhook returned status", resp.Status)
+			return
+		} else {
+			break
+		}
 	}
 }
