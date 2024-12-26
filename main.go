@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -53,13 +54,6 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Ensure log file for member validation is in the current working
-	// directory,
-	if strings.HasPrefix(*flagValidationLog, "/") || strings.HasPrefix(*flagValidationLog, "..") {
-		slog.Error("Validation log file must be in the current working directory")
-		os.Exit(1)
-	}
-
 	// Ensure log file exists and if not, create it
 	if _, err := os.Stat(*flagValidationLog); os.IsNotExist(err) {
 		slog.Info("Validation log file does not exist; creating it")
@@ -88,7 +82,7 @@ func main() {
 	mux.HandleFunc("/next", m.next)
 	mux.HandleFunc("/previous", m.previous)
 	mux.HandleFunc("/random", m.random)
-	mux.HandleFunc("/"+*flagValidationLog, m.validationLog)
+	mux.HandleFunc("/" + filepath.Base(*flagValidationLog), m.validationLog)
 
 	fileHandler := http.StripPrefix("/static/", http.FileServer(http.Dir("static")))
 	mux.Handle("/static/", fileHandler)
