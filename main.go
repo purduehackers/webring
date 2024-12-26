@@ -22,10 +22,12 @@ type ring struct {
 }
 
 type model struct {
-	ring         []ring
-	index        *template.Template
-	ringModTime  int64
-	indexModTime int64
+	ring            []ring
+	index           *template.Template
+	notFoundHtml    *string
+	notFoundModTime time.Time
+	ringModTime     time.Time
+	indexModTime    time.Time
 }
 
 // Pre-define all of our flags
@@ -33,6 +35,7 @@ var (
 	flagListen         *string = flag.StringP("listen", "l", "127.0.0.1:2857", "Host and port go-webring will listen on")
 	flagMembers        *string = flag.StringP("members", "m", "list.txt", "Path to list of webring members")
 	flagIndex          *string = flag.StringP("index", "i", "index.html", "Path to home page template")
+	flag404            *string = flag.StringP("404", "4", "404.html", "Path to HTML file to serve on 404")
 	flagContactString  *string = flag.StringP("contact", "c", "contact the admin and let them know what's up", "Contact instructions for errors")
 	flagValidationLog  *string = flag.StringP("validationlog", "v", "validation.log", "Path to validation log, see docs for requirements")
 	flagHost           *string = flag.StringP("host", "H", "", "Host this webring runs on, primarily used for validation")
@@ -121,4 +124,6 @@ func (m *model) init() {
 	slog.Info("Loaded members", "member_count", len(m.ring))
 	slog.Info("Building homepage", "file", *flagIndex)
 	m.parseIndex()
+	slog.Info("Reading 404 template", "file", *flag404)
+	m.parse404()
 }

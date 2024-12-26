@@ -21,6 +21,11 @@ func (m *model) tryUpdateRing() {
 
 // Serves the webpage created by createRoot()
 func (m model) root(writer http.ResponseWriter, request *http.Request) {
+	slog.Info("Request received", "url", request.URL) // NOCOMMIT
+	if request.URL.Path != "/" {
+		m.notFound(writer, request)
+		return
+	}
 	m.tryUpdateRing()
 	if m.modify("index") {
 		slog.Info("Index modified; clearing field and re-parsing")
@@ -115,4 +120,17 @@ func (m model) random(writer http.ResponseWriter, request *http.Request) {
 func (m model) validationLog(writer http.ResponseWriter, request *http.Request) {
 	http.Header.Add(writer.Header(), "Content-Type", "text/plain")
 	http.ServeFile(writer, request, *flagValidationLog)
+}
+
+func (m model) notFound(writer http.ResponseWriter, request *http.Request) {
+	if m.notFoundHtml == nil {
+		http.NotFound(writer, request)
+	} else {
+		if m.modify("404") {
+			m.parse404()
+		}
+		writer.WriteHeader(http.StatusNotFound)
+		writer.Header().Set("Content-Type", "text/html")
+		writer.Write([]byte(*m.notFoundHtml))
+	}
 }

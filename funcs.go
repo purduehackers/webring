@@ -32,7 +32,27 @@ func (m *model) parseIndex() {
 		slog.Error("Error getting file metadata", "file", *flagIndex, "error", err)
 		os.Exit(1)
 	}
-	m.indexModTime = tmplStat.ModTime().Unix()
+	m.indexModTime = tmplStat.ModTime()
+}
+
+func (m *model) parse404() {
+	stat, err := os.Stat(*flag404)
+	if err != nil && os.IsNotExist(err) {
+		slog.Warn("404 template not found. Falling back to empty body.", "file", *flag404)
+		m.notFoundHtml = nil
+		return
+	} else if err != nil {
+		slog.Error("Error getting file metadata", "file", *flag404, "error", err)
+		os.Exit(1)
+	}
+	body, err := os.ReadFile(*flag404)
+	if err != nil {
+		slog.Error("Error reading 404 template", "file", *flag404, "error", err)
+		os.Exit(1)
+	}
+	bodyStr := string(body)
+	m.notFoundHtml = &bodyStr
+	m.notFoundModTime = stat.ModTime()
 }
 
 // List parses the list of members, appends the data to a slice of type list,
@@ -53,7 +73,7 @@ func (m *model) parseList() {
 		slog.Error("Error getting file metadata", "file", *flagIndex, "error", err)
 		os.Exit(1)
 	}
-	m.ringModTime = fileStat.ModTime().Unix()
+	m.ringModTime = fileStat.ModTime()
 }
 
 // Modify takes arguments "index" or "ring" and returns true if either have been
@@ -65,16 +85,21 @@ func (m *model) modify(a string) bool {
 			slog.Error("Error getting file metadata", "file", *flagIndex, "error", err)
 			os.Exit(1)
 		}
-		curRingModTime := ringStat.ModTime().Unix()
-		return m.ringModTime < curRingModTime
+		return ringStat.ModTime().After(m.ringModTime)
 	} else if a == "index" {
 		indexStat, err := os.Stat(*flagIndex)
 		if err != nil {
 			slog.Error("Error getting file metadata", "file", *flagIndex, "error", err)
 			os.Exit(1)
 		}
-		curIndexModTime := indexStat.ModTime().Unix()
-		return m.indexModTime < curIndexModTime
+		return indexStat.ModTime().After(m.indexModTime)
+	} else if a == "404" {
+		stat, err := os.Stat(*flag404)
+		if err != nil {
+			slog.Error("Error getting file metadata", "file", *flagIndex, "error", err)
+			os.Exit(1)
+		}
+		return stat.ModTime().After(m.notFoundModTime)
 	} else {
 		slog.Error("modify() called with invalid argument", "arg", a)
 		os.Exit(1)
