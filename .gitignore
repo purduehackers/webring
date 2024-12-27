@@ -6,7 +6,8 @@ validation.log
 
 # Build directory
 /out/
+/result
 
-go-webring
+/webring
 
 /gomod2nix-template

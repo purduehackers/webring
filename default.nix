@@ -13,7 +13,7 @@
 }:
 
 buildGoApplication {
-  pname = "go-webring";
+  pname = "webring";
   version = "0.1";
   pwd = ./.;
   src = ./.;
