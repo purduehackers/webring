@@ -42,7 +42,7 @@ var (
 	flagHost           *string = flag.StringP("host", "H", "", "Host this webring runs on, primarily used for validation")
 	flagDiscordUrlFile *string = flag.StringP("discord-url-file", "d", "discord-webhook-url.txt", "Path to file containing Discord webhook URL")
 
-	gDiscordUrl        *string = nil // Will be read from flagDiscordUrlFile
+	gDiscordUrl *string = nil // Will be read from flagDiscordUrlFile
 )
 
 func main() {
@@ -82,7 +82,7 @@ func main() {
 	mux.HandleFunc("/next", m.next)
 	mux.HandleFunc("/previous", m.previous)
 	mux.HandleFunc("/random", m.random)
-	mux.HandleFunc("/" + filepath.Base(*flagValidationLog), m.validationLog)
+	mux.HandleFunc("/"+filepath.Base(*flagValidationLog), m.validationLog)
 
 	fileHandler := http.StripPrefix("/static/", http.FileServer(http.Dir("static")))
 	mux.Handle("/static/", fileHandler)

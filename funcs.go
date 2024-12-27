@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -66,7 +67,10 @@ func (m *model) parseList() {
 	lines := strings.Split(string(file), "\n")
 	for _, line := range lines[:len(lines)-1] {
 		fields := strings.Fields(line)
-		m.ring = append(m.ring, ring{handle: fields[0], discordUserId: fields[1], url: fields[2]})
+		handle, err := url.QueryUnescape(fields[0])
+		if err == nil {
+			m.ring = append(m.ring, ring{handle: handle, discordUserId: fields[1], url: fields[2]})
+		}
 	}
 	fileStat, err := os.Stat(*flagMembers)
 	if err != nil {

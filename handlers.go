@@ -56,7 +56,7 @@ func (m model) next(writer http.ResponseWriter, request *http.Request) {
 	length := len(m.ring)
 	for i, item := range m.ring {
 		if item.url == host {
-			for j := i + 1; j < length + i; j++ {
+			for j := i + 1; j < length+i; j++ {
 				dest := m.ring[j%length]
 				destUrl := scheme + dest.url
 				slog.Info("Checking site response", "site", destUrl)
@@ -86,8 +86,8 @@ func (m model) previous(writer http.ResponseWriter, request *http.Request) {
 	length := len(m.ring)
 	for i, item := range m.ring {
 		if item.url == host {
-			for j := i - 1; j > i - length; j-- {
-				dest := m.ring[(j + length) % length]
+			for j := i - 1; j > i-length; j-- {
+				dest := m.ring[(j+length)%length]
 				destUrl := scheme + dest.url
 				slog.Info("Checking site response", "site", destUrl)
 				if is200(destUrl) {

@@ -66,7 +66,7 @@ func (m *model) validateMembers() {
 		resp, err := http.Get("https://" + site.url)
 		if err != nil {
 			slog.Error("Error fetching site", "user", site.handle, "url", site.url, "error", err)
-			issues = append(issues, "Error with site: " + err.Error())
+			issues = append(issues, "Error with site: "+err.Error())
 			report += siteReportHeader
 			report += formatIssues(issues)
 			continue
@@ -198,10 +198,10 @@ func notifyUser(site ring, issues []string) {
 
 	// https://discord.com/developers/docs/resources/webhook#execute-webhook
 	const SUPPRESS_EMBEDS int = 1 << 2
-	payload := map[string]interface{} {
+	payload := map[string]interface{}{
 		"content": fmt.Sprintf("<@%s>, please fix the following issues with your site's webring integration:\n%s", site.discordUserId, issuesText),
-		"allowed_mentions": map[string]interface{} {
-			"users": []string {site.discordUserId},
+		"allowed_mentions": map[string]interface{}{
+			"users": []string{site.discordUserId},
 		},
 		"flags": SUPPRESS_EMBEDS,
 	}
@@ -228,7 +228,7 @@ func notifyUser(site ring, issues []string) {
 			}
 			waitSeconds, err := strconv.ParseInt(retryAfter, 10, 64)
 			if err != nil {
-				logger.Error("Invalid Retry-After header in response", "header", "Retry-After: " + retryAfter)
+				logger.Error("Invalid Retry-After header in response", "header", "Retry-After: "+retryAfter)
 				return
 			}
 			logger.Warn("Discord rate limit exceeded", "retry_after_seconds", waitSeconds)
