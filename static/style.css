@@ -75,3 +75,7 @@ footer {
         color: #d2abef;
     }
 }
+
+.tablecontainer {
+	overflow-x: auto;
+}
