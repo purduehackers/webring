@@ -134,3 +134,7 @@ func (m model) notFound(writer http.ResponseWriter, request *http.Request) {
 		writer.Write([]byte(*m.notFoundHtml))
 	}
 }
+
+func (m model) healthCheck(writer http.ResponseWriter, request *http.Request) {
+	writer.WriteHeader(http.StatusNoContent)
+}
