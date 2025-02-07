@@ -3,7 +3,7 @@
     position: fixed;
     top: 0;
     left: 0;
-    height: 100vh;
+    height: 100dvh;
     width: 100vw;
     background-image: url("/static/PurdueHackers.svg");
     background-size: 70px;
@@ -23,7 +23,7 @@ body {
     color: #383838;
     padding: 60px 24px 200px 24px;
     font-family: "Verdana", "Helvetica", sans-serif;
-    min-height: 100vh;
+    min-height: 100dvh;
     box-sizing: border-box;
 }
 h1, h2, h3 {
