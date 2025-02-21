@@ -26,7 +26,7 @@ Usage of ./go-webring
   -v, --validationlog string   Path to validation log, see docs for requirements (default "validation.log")
 ```
 
-This webring implementation handles four paths:
+This webring implementation handles five paths:
 - **Root:** returns the home page template replacing the string "`{{ . }}`" with
   an HTML table of ring members
 - **Next:** returns a 302 redirect pointing to the next site in the list
@@ -36,6 +36,8 @@ This webring implementation handles four paths:
   specified in the command line flags
   - For example, with `-v validationlog -h example.com`, the path would be
     `example.com/validationlog`
+- **Healthcheck:** returns a 204 (no content) response, which can be used to
+  check whether the webring is up.
 
 The **next** and **previous** paths require a `?host=` parameter containing a
 URL-encoded URI of the site being visited. For example, if Sam is a member of a
