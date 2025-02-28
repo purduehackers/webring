@@ -136,5 +136,6 @@ func (m model) notFound(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (m model) healthCheck(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Add("Access-Control-Allow-Origin", "*")
 	writer.WriteHeader(http.StatusNoContent)
 }
