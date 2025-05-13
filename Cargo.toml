@@ -1,0 +1,13 @@
+[package]
+name = "ph-webring"
+version = "0.0.0"
+description = "Purdue Hackers' webring server"
+repository = "https://github.com/purduehackers/webring"
+authors = [
+    "Kian Kasad <kian@kasad.com>",
+    "Henry Rovnyak <h.rovnyak@proton.me>",
+]
+
+edition = "2024"
+
+[dependencies]
