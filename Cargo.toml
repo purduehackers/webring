@@ -19,7 +19,7 @@ axum = "0.8.4"
 clap = { version = "4.5.38", features = ["derive"] }
 crashlog = "0.1.3"
 eyre = "0.6.12"
-ftail = "0.2.1"
+ftail = "0.3.0"
 futures = "0.3.31"
 log = "0.4.27"
 rand = "0.9.1"

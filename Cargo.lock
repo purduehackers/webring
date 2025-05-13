@@ -294,9 +294,9 @@ dependencies = [
 
 [[package]]
 name = "ftail"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdfb03d554599f140807fcf79f0363cfa7024a328e3030da47145b4350a130b0"
+checksum = "6aba7adfd4915e165ee87662f23fa01a4c530c5ac79c8fb2f7d160cdf0fa30d6"
 dependencies = [
  "chrono",
  "log",

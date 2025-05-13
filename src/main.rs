@@ -83,12 +83,7 @@ async fn main() -> ExitCode {
         logger = logger.console(cli.verbosity.into());
     }
     if let Some(path) = &cli.log_file {
-        // TODO: Remove if/when https://github.com/tjardoo/ftail/pull/9 makes it into a release
-        let Some(path_str) = path.to_str() else {
-            eprintln!("Error: log file path must be valid UTF-8");
-            return ExitCode::FAILURE;
-        };
-        logger = logger.single_file(path_str, true, cli.verbosity.into());
+        logger = logger.single_file(path, true, cli.verbosity.into());
     }
     if let Err(err) = logger.init() {
         eprintln!("Error: failed to initialize logger: {err}");
