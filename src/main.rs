@@ -5,11 +5,13 @@ use std::{
     process::ExitCode,
 };
 
-use axum::{Router, routing::get};
 use clap::{Parser, ValueEnum};
 use crashlog::cargo_metadata;
 use ftail::Ftail;
 use log::{LevelFilter, error, info};
+use routes::create_router;
+
+mod routes;
 
 /// Default log level.
 const DEFAULT_LOG_LEVEL: LevelFilterWrapper = if cfg!(debug_assertions) {
@@ -32,6 +34,10 @@ struct CliOptions {
     /// File to print logs to in addition to the console
     #[arg(short = 'o', long)]
     log_file: Option<PathBuf>,
+
+    /// Directory from which to serve static content
+    #[arg(short = 'd', long, default_value = "static")]
+    static_dir: PathBuf,
 }
 
 // This type exists so clap can figure out what variants are available for the verbosity option.
@@ -74,7 +80,7 @@ async fn main() -> ExitCode {
     } else {
         logger = logger.console(cli.verbosity.into());
     }
-    if let Some(path) = cli.log_file {
+    if let Some(path) = &cli.log_file {
         // TODO: Remove if/when https://github.com/tjardoo/ftail/pull/9 makes it into a release
         let Some(path_str) = path.to_str() else {
             eprintln!("Error: log file path must be valid UTF-8");
@@ -88,13 +94,13 @@ async fn main() -> ExitCode {
     }
 
     // Start server
-    let app = Router::new().route("/", get(serve_index));
+    let router = create_router(&cli);
     let bind_addr = "0.0.0.0:3000";
     match tokio::net::TcpListener::bind(bind_addr).await {
         // Unwrapping this is fine because it will never resolve
         Ok(listener) => {
             info!("Listening on http://{bind_addr}");
-            axum::serve(listener, app).await.unwrap();
+            axum::serve(listener, router).await.unwrap();
         }
         Err(err) => {
             error!("Failed to listen on {bind_addr}: {err}");
@@ -103,8 +109,4 @@ async fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
-}
-
-async fn serve_index() -> &'static str {
-    "Hello, world!\n"
 }
