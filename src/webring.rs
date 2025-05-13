@@ -22,7 +22,7 @@ async fn check(website: &Uri, check_level: CheckLevel) -> eyre::Result<bool> {
     Ok(true)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CheckLevel {
     ForLinks,
     JustOnline,
@@ -110,6 +110,8 @@ impl Webring {
 
         let ret = collect_errs(tasks).await;
 
+        *self.inner.write().unwrap() = new_members;
+
         *self.homepage.write().await = None;
 
         ret
@@ -136,7 +138,7 @@ impl Webring {
 
     /// Get the next page in the webring from the given URI; based on the authority part
     ///
-    /// Returns None if the URI has no authority (is relative) or all of the webring members failed the check.
+    /// Returns None if the URI has no authority (is relative), the authority was not found in the webring, or all of the webring members failed the check.
     pub fn next_page(&self, uri: &Uri) -> Option<Arc<Uri>> {
         let inner = self.inner.read().unwrap();
         let mut idx = *inner.members_table.get(uri.authority()?)?;
@@ -159,7 +161,7 @@ impl Webring {
 
     /// Get the previous page in the webring from the given URI; based on the authority part
     ///
-    /// Returns None if the URI has no authority (is relative) or all of the webring members failed the check.
+    /// Returns None if the URI has no authority (is relative), the authority was not found in the webring, or all of the webring members failed the check.
     pub fn prev_page(&self, uri: &Uri) -> Option<Arc<Uri>> {
         let inner = self.inner.read().unwrap();
         let mut idx = *inner.members_table.get(uri.authority()?)?;
@@ -331,4 +333,227 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
     }
 
     Ok(members)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+
+    use axum::http::{Uri, uri::Authority};
+    use tempfile::NamedTempFile;
+
+    use crate::webring::{CheckLevel, Webring};
+
+    use super::Member;
+
+    impl PartialEq for Member {
+        fn eq(&self, other: &Self) -> bool {
+            self.name == other.name
+                && self.website == other.website
+                && self.discord_id == other.discord_id
+                && self.check_level == other.check_level
+                && self.check_successful.load(Ordering::Relaxed)
+                    == other.check_successful.load(Ordering::Relaxed)
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn test_webring() {
+        let file = NamedTempFile::new().unwrap();
+        tokio::fs::write(
+            file.path(),
+            "
+henry — hrovnyak.gitlab.io — 123 — None
+kian — kasad.com — 456 — NonE
+cynthia — https://clementine.viridian.page — 789 — nONE
+??? — ws://refuse-the-r.ing — bruh — none
+",
+        )
+        .await
+        .unwrap();
+
+        let webring = Webring::new(file.path().to_owned()).await.unwrap();
+
+        {
+            let inner = webring.inner.read().unwrap();
+
+            let mut expected_table = HashMap::new();
+            expected_table.insert(Authority::from_static("hrovnyak.gitlab.io"), 0);
+            expected_table.insert(Authority::from_static("kasad.com"), 1);
+            expected_table.insert(Authority::from_static("clementine.viridian.page"), 2);
+            expected_table.insert(Authority::from_static("refuse-the-r.ing"), 3);
+
+            assert_eq!(inner.members_table, expected_table);
+
+            let expected_ordering = vec![
+                Member {
+                    name: "henry".to_owned(),
+                    website: Arc::new(Uri::from_static("hrovnyak.gitlab.io")),
+                    discord_id: "123".to_owned(),
+                    check_level: CheckLevel::None,
+                    check_successful: Arc::new(AtomicBool::new(true)),
+                },
+                Member {
+                    name: "kian".to_owned(),
+                    website: Arc::new(Uri::from_static("kasad.com")),
+                    discord_id: "456".to_owned(),
+                    check_level: CheckLevel::None,
+                    check_successful: Arc::new(AtomicBool::new(true)),
+                },
+                Member {
+                    name: "cynthia".to_owned(),
+                    website: Arc::new(Uri::from_static("https://clementine.viridian.page")),
+                    discord_id: "789".to_owned(),
+                    check_level: CheckLevel::None,
+                    check_successful: Arc::new(AtomicBool::new(true)),
+                },
+                Member {
+                    name: "???".to_owned(),
+                    website: Arc::new(Uri::from_static("ws://refuse-the-r.ing")),
+                    discord_id: "bruh".to_owned(),
+                    check_level: CheckLevel::None,
+                    check_successful: Arc::new(AtomicBool::new(true)),
+                },
+            ];
+            assert_eq!(inner.ordering, expected_ordering);
+        }
+
+        assert_eq!(
+            &*webring
+                .next_page(&Uri::from_static(
+                    "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh"
+                ))
+                .unwrap(),
+            &Uri::from_static("kasad.com")
+        );
+
+        assert_eq!(
+            &*webring
+                .prev_page(&Uri::from_static(
+                    "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh"
+                ))
+                .unwrap(),
+            &Uri::from_static("ws://refuse-the-r.ing")
+        );
+
+        assert_eq!(
+            &*webring
+                .next_page(&Uri::from_static("huh://refuse-the-r.ing"))
+                .unwrap(),
+            &Uri::from_static("hrovnyak.gitlab.io")
+        );
+
+        assert!(
+            webring
+                .prev_page(&Uri::from_static("https://kasad.com:3000"))
+                .is_none()
+        );
+
+        assert_eq!(
+            &*webring
+                .next_page(&Uri::from_static("https://kasad.com"))
+                .unwrap(),
+            &Uri::from_static("https://clementine.viridian.page")
+        );
+
+        webring.inner.write().unwrap().ordering[0]
+            .check_successful
+            .store(false, Ordering::Relaxed);
+
+        assert_eq!(
+            &*webring
+                .next_page(&Uri::from_static(
+                    "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh"
+                ))
+                .unwrap(),
+            &Uri::from_static("kasad.com")
+        );
+
+        assert_eq!(
+            &*webring
+                .prev_page(&Uri::from_static(
+                    "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh"
+                ))
+                .unwrap(),
+            &Uri::from_static("ws://refuse-the-r.ing")
+        );
+
+        assert_eq!(
+            &*webring
+                .next_page(&Uri::from_static("refuse-the-r.ing"))
+                .unwrap(),
+            &Uri::from_static("kasad.com")
+        );
+
+        assert_eq!(
+            &*webring.prev_page(&Uri::from_static("kasad.com")).unwrap(),
+            &Uri::from_static("ws://refuse-the-r.ing")
+        );
+
+        let mut found_in_random = HashSet::new();
+
+        for _ in 0..200 {
+            found_in_random.insert((*webring.random_page().unwrap()).clone());
+        }
+
+        let mut expected_random = HashSet::new();
+        expected_random.insert(Uri::from_static("kasad.com"));
+        expected_random.insert(Uri::from_static("https://clementine.viridian.page"));
+        expected_random.insert(Uri::from_static("ws://refuse-the-r.ing"));
+
+        assert_eq!(found_in_random, expected_random);
+
+        tokio::fs::write(
+            file.path(),
+            "
+cynthia — https://clementine.viridian.page — 789 — nONE
+henry — hrovnyak.gitlab.io — 123 — None
+??? — http://refuse-the-r.ing — bruh — none
+arhan — arhan.sh — qter — none
+kian — kasad.com — 456 — NonE
+",
+        )
+        .await
+        .unwrap();
+
+        webring.update_from_file().await.unwrap();
+
+        assert_eq!(
+            &*webring
+                .next_page(&Uri::from_static("clementine.viridian.page"))
+                .unwrap(),
+            &Uri::from_static("http://refuse-the-r.ing")
+        );
+
+        assert_eq!(
+            &*webring
+                .next_page(&Uri::from_static("hrovnyak.gitlab.io"))
+                .unwrap(),
+            &Uri::from_static("http://refuse-the-r.ing")
+        );
+
+        assert_eq!(
+            &*webring
+                .next_page(&Uri::from_static("refuse-the-r.ing"))
+                .unwrap(),
+            &Uri::from_static("arhan.sh")
+        );
+
+        assert_eq!(
+            &*webring.next_page(&Uri::from_static("arhan.sh")).unwrap(),
+            &Uri::from_static("kasad.com")
+        );
+
+        assert_eq!(
+            &*webring.next_page(&Uri::from_static("kasad.com")).unwrap(),
+            &Uri::from_static("https://clementine.viridian.page")
+        );
+    }
 }

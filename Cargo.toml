@@ -25,3 +25,6 @@ log = "0.4.27"
 rand = "0.9.1"
 tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread"] }
 tower-http = { version = "0.6.4", features = ["cors", "fs"] }
+
+[dev-dependencies]
+tempfile = "3.20.0"

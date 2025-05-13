@@ -15,6 +15,10 @@ impl Homepage {
         Ok(Homepage { html })
     }
 
+    pub fn to_html(&self) -> &str {
+        &self.html
+    }
+
     fn render_table(members: &[MemberForHomepage]) -> String {
         let mut rendered = String::new();
 
