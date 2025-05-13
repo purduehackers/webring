@@ -11,8 +11,9 @@ use ftail::Ftail;
 use log::{LevelFilter, error, info};
 use routes::create_router;
 
-mod members;
+mod render_homepage;
 mod routes;
+mod webring;
 
 /// Default log level.
 const DEFAULT_LOG_LEVEL: LevelFilterWrapper = if cfg!(debug_assertions) {

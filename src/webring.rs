@@ -62,6 +62,12 @@ pub struct Webring {
     path: Arc<Path>,
 }
 
+pub struct MemberForHomepage {
+    pub name: String,
+    pub website: String,
+    pub check_successful: bool,
+}
+
 impl Webring {
     pub async fn new(file: PathBuf) -> eyre::Result<Webring> {
         let webring_data = parse_file(&file).await?;
