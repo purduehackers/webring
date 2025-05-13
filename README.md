@@ -16,8 +16,8 @@ Fork-specific features:
 ## Usage
 
 ``` text
-$ ./go-webring -h
-Usage of ./go-webring
+$ ./webring -h
+Usage of ./webring
   -c, --contact string         Contact instructions for errors (default "contact the admin and let them know what's up")
   -h, --host string            Host this webring runs on, primarily used for validation
   -i, --index string           Path to home page template (default "index.html")
@@ -51,7 +51,7 @@ members.
 ### With provided examples
 
 See the included `list.txt` and `index.md` for examples of a webring setup. To
-run `go-webring` with those examples, first install [pandoc](https://pandoc.org)
+run `webring` with those examples, first install [pandoc](https://pandoc.org)
 then generate `index.html` from `index.md` like so:
 
 ``` shell
@@ -68,7 +68,7 @@ After that, simply execute the binary then open
 [localhost:2857](http://localhost:2857) in your browser.
 
 ``` shell
-$ ./go-webring
+$ ./webring
 ```
 
 ### With custom files
@@ -166,7 +166,7 @@ and specify the path to this file using the command-line options. You can also
 For the upstream go-webring project, [see here][upstream].
 
 If you have questions/comments/suggestions about this project, feel free to open
-an issue or pull request at <https://github.com/kdkasad/go-webring>.
+an issue or pull request at <https://github.com/purduehackers/webring>.
 
 [upstream]: https://git.sr.ht/~amolith/go-webring
 
