@@ -240,7 +240,7 @@ impl Webring {
                     .collect::<Vec<_>>()
             };
 
-            let homepage = Arc::new(Homepage::new(members).await?);
+            let homepage = Arc::new(Homepage::new(&members).await?);
 
             *maybe_homepage = Some(Arc::clone(&homepage));
 
