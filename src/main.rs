@@ -11,6 +11,7 @@ use ftail::Ftail;
 use log::{LevelFilter, error, info};
 use routes::create_router;
 
+mod members;
 mod routes;
 
 /// Default log level.
