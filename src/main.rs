@@ -6,7 +6,6 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
-use crashlog::cargo_metadata;
 use ftail::Ftail;
 use log::{LevelFilter, error, info};
 use routes::create_router;
@@ -70,9 +69,6 @@ impl From<LevelFilterWrapper> for LevelFilter {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // For crash reporting
-    crashlog::setup!(cargo_metadata!(), false);
-
     let cli = CliOptions::parse();
 
     // Set up logging
