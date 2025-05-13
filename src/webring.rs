@@ -13,6 +13,8 @@ use rand::seq::SliceRandom;
 
 use log::warn;
 
+use crate::render_homepage::Homepage;
+
 #[allow(clippy::unused_async)]
 async fn check(website: &str, check_level: CheckLevel) -> eyre::Result<bool> {
     // TODO
@@ -59,13 +61,9 @@ pub struct Webring {
     // https://docs.rs/tokio/latest/tokio/sync/struct.Mutex.html#which-kind-of-mutex-should-you-use
     // This is a good case for std locks
     inner: Arc<RwLock<WebringData>>,
+    // This one we would like to hold across awaits
+    homepage: Arc<tokio::sync::RwLock<Option<Arc<Homepage>>>>,
     path: Arc<Path>,
-}
-
-pub struct MemberForHomepage {
-    pub name: String,
-    pub website: String,
-    pub check_successful: bool,
 }
 
 impl Webring {
@@ -74,6 +72,7 @@ impl Webring {
         let webring = Webring {
             inner: Arc::new(RwLock::new(webring_data)),
             path: Arc::from(file),
+            homepage: Arc::new(tokio::sync::RwLock::new(None)),
         };
 
         webring.check_members().await?;
@@ -102,7 +101,11 @@ impl Webring {
             }
         }
 
-        collect_errs(tasks).await
+        let ret = collect_errs(tasks).await;
+
+        *self.homepage.write().await = None;
+
+        ret
     }
 
     pub async fn check_members(&self) -> eyre::Result<()> {
@@ -116,7 +119,11 @@ impl Webring {
             }
         }
 
-        collect_errs(tasks).await
+        let ret = collect_errs(tasks).await;
+
+        *self.homepage.write().await = None;
+
+        ret
     }
 
     pub fn next_page(&self, name: &str) -> Option<Arc<str>> {
@@ -184,6 +191,54 @@ impl Webring {
 
         None
     }
+
+    pub async fn homepage(&self) -> eyre::Result<Arc<Homepage>> {
+        let maybe_homepage = self.homepage.read().await;
+
+        if let Some(homepage) = &*maybe_homepage {
+            Ok(Arc::clone(homepage))
+        } else {
+            drop(maybe_homepage);
+            let mut maybe_homepage = self.homepage.write().await;
+
+            // Just in case it got written between releasing and acquiring the lock
+            if let Some(homepage) = &*maybe_homepage {
+                return Ok(Arc::clone(homepage));
+            }
+
+            let members = {
+                let inner = self.inner.read().unwrap();
+
+                let mut members = inner.members_table.iter().collect::<Vec<_>>();
+
+                members.sort_unstable_by_key(|v| *v.1);
+
+                members
+                    .into_iter()
+                    .map(|v| {
+                        let member_info = &inner.ordering[*v.1];
+                        MemberForHomepage {
+                            name: v.0.to_owned(),
+                            website: member_info.website.to_string(),
+                            check_successful: member_info.check_successful.load(Ordering::Relaxed),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+            let homepage = Arc::new(Homepage::new(members).await?);
+
+            *maybe_homepage = Some(Arc::clone(&homepage));
+
+            Ok(homepage)
+        }
+    }
+}
+
+pub struct MemberForHomepage {
+    pub name: String,
+    pub website: String,
+    pub check_successful: bool,
 }
 
 async fn collect_errs(
