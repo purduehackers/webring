@@ -1,5 +1,8 @@
 use std::{
+    convert::AsRef,
+    env::args_os,
     io::{IsTerminal, stderr},
+    iter::once,
     net::SocketAddr,
     path::PathBuf,
     process::ExitCode,
@@ -39,6 +42,10 @@ struct CliOptions {
     /// Directory from which to serve static content
     #[arg(short = 'd', long, default_value = "static")]
     static_dir: PathBuf,
+
+    /// File to read more arguments from
+    #[arg(short = 'f', long)]
+    arg_file: Option<PathBuf>,
 }
 
 // This type exists so clap can figure out what variants are available for the verbosity option.
@@ -69,7 +76,19 @@ impl From<LevelFilterWrapper> for LevelFilter {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cli = CliOptions::parse();
+    // Parse CLI options
+    let mut cli = CliOptions::parse();
+    if let Some(path) = &cli.arg_file {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => {
+                let argv0 = args_os().next().unwrap();
+                cli.update_from(
+                    once(argv0.as_os_str()).chain(contents.split_whitespace().map(AsRef::as_ref)),
+                );
+            }
+            Err(err) => eprintln!("Error: failed to read argument file: {err}"),
+        }
+    }
 
     // Set up logging
     let mut logger = Ftail::new();
@@ -88,7 +107,7 @@ async fn main() -> ExitCode {
 
     // Start server
     let router = create_router(&cli);
-    let bind_addr = "0.0.0.0:3000";
+    let bind_addr = &cli.listen_addr;
     match tokio::net::TcpListener::bind(bind_addr).await {
         // Unwrapping this is fine because it will never resolve
         Ok(listener) => {
