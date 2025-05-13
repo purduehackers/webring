@@ -11,3 +11,4 @@ authors = [
 edition = "2024"
 
 [dependencies]
+crashlog = "0.1.3"

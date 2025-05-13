@@ -1,3 +1,6 @@
+use crashlog::cargo_metadata;
+
 fn main() {
-    println!("Hello, world!");
+    // For crash reporting
+    crashlog::setup!(cargo_metadata!(), false);
 }
