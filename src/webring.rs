@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use axum::http::Uri;
+use axum::http::{Uri, uri::Authority};
 use eyre::eyre;
 use futures::{StreamExt, stream::FuturesUnordered};
 use rand::seq::SliceRandom;
@@ -31,6 +31,7 @@ enum CheckLevel {
 
 #[derive(Debug)]
 struct Member {
+    name: String,
     website: Arc<Uri>,
     discord_id: String,
     check_level: CheckLevel,
@@ -53,14 +54,15 @@ impl Member {
 
 #[derive(Debug)]
 struct WebringData {
-    members_table: HashMap<String, usize>,
+    members_table: HashMap<Authority, usize>,
     ordering: Vec<Member>,
 }
 
+/// The data structure underlying a webring. Implements the core webring functionality.
 #[derive(Clone)]
 pub struct Webring {
     // https://docs.rs/tokio/latest/tokio/sync/struct.Mutex.html#which-kind-of-mutex-should-you-use
-    // This is a good case for std locks
+    // This is a good case for std locks because we will never need to hold it across an await
     inner: Arc<RwLock<WebringData>>,
     // This one we would like to hold across awaits
     homepage: Arc<tokio::sync::RwLock<Option<Arc<Homepage>>>>,
@@ -68,6 +70,7 @@ pub struct Webring {
 }
 
 impl Webring {
+    /// Create a webring by parsing the file at the given path.
     pub async fn new(file: PathBuf) -> eyre::Result<Webring> {
         let webring_data = parse_file(&file).await?;
         let webring = Webring {
@@ -81,6 +84,9 @@ impl Webring {
         Ok(webring)
     }
 
+    /// Update the webring in-place by re-parsing the file given in the original `new` call, and invalidating the cache of the SSR'ed homepage.
+    ///
+    /// Useful for updating the webring without restarting the server.
     pub async fn update_from_file(&self) -> eyre::Result<()> {
         let mut new_members = parse_file(&self.path).await?;
         let tasks = FuturesUnordered::new();
@@ -109,6 +115,7 @@ impl Webring {
         ret
     }
 
+    /// Query everyone's webpages and check them according to their respective check levels.
     pub async fn check_members(&self) -> eyre::Result<()> {
         let tasks = FuturesUnordered::new();
 
@@ -127,9 +134,12 @@ impl Webring {
         ret
     }
 
-    pub fn next_page(&self, name: &str) -> Option<Arc<Uri>> {
+    /// Get the next page in the webring from the given URI; based on the authority part
+    ///
+    /// Returns None if the URI has no authority (is relative) or all of the webring members failed the check.
+    pub fn next_page(&self, uri: &Uri) -> Option<Arc<Uri>> {
         let inner = self.inner.read().unwrap();
-        let mut idx = *inner.members_table.get(name)?;
+        let mut idx = *inner.members_table.get(uri.authority()?)?;
 
         for _ in 0..inner.ordering.len() {
             idx += 1;
@@ -147,9 +157,12 @@ impl Webring {
         None
     }
 
-    pub fn prev_page(&self, name: &str) -> Option<Arc<Uri>> {
+    /// Get the previous page in the webring from the given URI; based on the authority part
+    ///
+    /// Returns None if the URI has no authority (is relative) or all of the webring members failed the check.
+    pub fn prev_page(&self, uri: &Uri) -> Option<Arc<Uri>> {
         let inner = self.inner.read().unwrap();
-        let mut idx = *inner.members_table.get(name)?;
+        let mut idx = *inner.members_table.get(uri.authority()?)?;
 
         for _ in 0..inner.ordering.len() {
             if idx == 0 {
@@ -167,6 +180,9 @@ impl Webring {
         None
     }
 
+    /// Get a random page in the webring.
+    ///
+    /// Returns None if all of the webring members failed the check.
     pub fn random_page(&self) -> Option<Arc<Uri>> {
         let inner = self.inner.read().unwrap();
         let mut range = (0..inner.ordering.len()).collect::<Vec<_>>();
@@ -193,6 +209,9 @@ impl Webring {
         None
     }
 
+    /// Return a server-side rendered homepage.
+    ///
+    /// This method is cached, and the cache gets invalidated whenever the webring is updated.
     pub async fn homepage(&self) -> eyre::Result<Arc<Homepage>> {
         let maybe_homepage = self.homepage.read().await;
 
@@ -210,19 +229,13 @@ impl Webring {
             let members = {
                 let inner = self.inner.read().unwrap();
 
-                let mut members = inner.members_table.iter().collect::<Vec<_>>();
-
-                members.sort_unstable_by_key(|v| *v.1);
-
-                members
-                    .into_iter()
-                    .map(|v| {
-                        let member_info = &inner.ordering[*v.1];
-                        MemberForHomepage {
-                            name: v.0.to_owned(),
-                            website: (*member_info.website).clone(),
-                            check_successful: member_info.check_successful.load(Ordering::Relaxed),
-                        }
+                inner
+                    .ordering
+                    .iter()
+                    .map(|member_info| MemberForHomepage {
+                        name: member_info.name.clone(),
+                        website: (*member_info.website).clone(),
+                        check_successful: member_info.check_successful.load(Ordering::Relaxed),
                     })
                     .collect::<Vec<_>>()
             };
@@ -276,7 +289,7 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
         if split.len() != 4 {
             return Err(eyre!(
                 "Expected four parameters of the form `name — website — discord id — check level`. Got:\n\n{line}{}",
-                if line.contains('-') {
+                if line.contains(['-', '–']) {
                     "\n\nHelp: Dashes are expected to be emdashes (—) to avoid clashing with regular dashes."
                 } else {
                     ""
@@ -298,11 +311,13 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
 
         let uri = split[1].parse::<Uri>()?;
 
-        if uri.authority().is_none() {
-            return Err(eyre!("URLs must not be relative. Got: {uri}"));
-        }
+        let authority = match uri.authority() {
+            Some(v) => v.to_owned(),
+            None => return Err(eyre!("URLs must not be relative. Got: {uri}")),
+        };
 
         let member = Member {
+            name: split[0].to_owned(),
             website: Arc::from(uri),
             discord_id: split[2].to_owned(),
             check_level,
@@ -311,7 +326,7 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
 
         members
             .members_table
-            .insert(split[0].to_owned(), members.ordering.len());
+            .insert(authority, members.ordering.len());
         members.ordering.push(member);
     }
 
