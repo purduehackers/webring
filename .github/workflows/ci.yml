@@ -19,12 +19,13 @@ on:
 
 env:
   RUST_BACKTRACE: short
-  RUSTFLAGS: '-D warnings'
 
 jobs:
   clippy:
     name: Lint code
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: '-D warnings'
     steps:
       - name: Check out sources
         uses: actions/checkout@v4
