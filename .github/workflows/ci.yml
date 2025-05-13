@@ -8,6 +8,7 @@ on:
       - "examples/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "build.rs"
       - ".github/workflows/ci.yml"
   pull_request:
