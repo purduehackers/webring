@@ -23,7 +23,7 @@ impl Homepage {
                 &mut rendered,
                 "<tr{class}><th>{name}</th><th><a href={link}>{link}</a></th></tr>",
                 name = member.name,
-                link = member.website,
+                link = member.website.authority().unwrap(),
                 class = if member.check_successful {
                     ""
                 } else {

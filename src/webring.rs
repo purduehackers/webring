@@ -7,6 +7,7 @@ use std::{
     },
 };
 
+use axum::http::Uri;
 use eyre::eyre;
 use futures::{StreamExt, stream::FuturesUnordered};
 use rand::seq::SliceRandom;
@@ -16,7 +17,7 @@ use log::warn;
 use crate::render_homepage::Homepage;
 
 #[allow(clippy::unused_async)]
-async fn check(website: &str, check_level: CheckLevel) -> eyre::Result<bool> {
+async fn check(website: &Uri, check_level: CheckLevel) -> eyre::Result<bool> {
     // TODO
     Ok(true)
 }
@@ -30,7 +31,7 @@ enum CheckLevel {
 
 #[derive(Debug)]
 struct Member {
-    website: Arc<str>,
+    website: Arc<Uri>,
     discord_id: String,
     check_level: CheckLevel,
     check_successful: Arc<AtomicBool>,
@@ -126,7 +127,7 @@ impl Webring {
         ret
     }
 
-    pub fn next_page(&self, name: &str) -> Option<Arc<str>> {
+    pub fn next_page(&self, name: &str) -> Option<Arc<Uri>> {
         let inner = self.inner.read().unwrap();
         let mut idx = *inner.members_table.get(name)?;
 
@@ -146,7 +147,7 @@ impl Webring {
         None
     }
 
-    pub fn prev_page(&self, name: &str) -> Option<Arc<str>> {
+    pub fn prev_page(&self, name: &str) -> Option<Arc<Uri>> {
         let inner = self.inner.read().unwrap();
         let mut idx = *inner.members_table.get(name)?;
 
@@ -166,7 +167,7 @@ impl Webring {
         None
     }
 
-    pub fn random_page(&self) -> Option<Arc<str>> {
+    pub fn random_page(&self) -> Option<Arc<Uri>> {
         let inner = self.inner.read().unwrap();
         let mut range = (0..inner.ordering.len()).collect::<Vec<_>>();
         let mut range = &mut *range;
@@ -219,7 +220,7 @@ impl Webring {
                         let member_info = &inner.ordering[*v.1];
                         MemberForHomepage {
                             name: v.0.to_owned(),
-                            website: member_info.website.to_string(),
+                            website: (*member_info.website).clone(),
                             check_successful: member_info.check_successful.load(Ordering::Relaxed),
                         }
                     })
@@ -237,7 +238,7 @@ impl Webring {
 
 pub struct MemberForHomepage {
     pub name: String,
-    pub website: String,
+    pub website: Uri,
     pub check_successful: bool,
 }
 
@@ -295,8 +296,14 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
             }
         };
 
+        let uri = split[1].parse::<Uri>()?;
+
+        if uri.authority().is_none() {
+            return Err(eyre!("URLs must not be relative. Got: {uri}"));
+        }
+
         let member = Member {
-            website: Arc::from(split[1]),
+            website: Arc::from(uri),
             discord_id: split[2].to_owned(),
             check_level,
             check_successful: Arc::new(AtomicBool::new(false)),
