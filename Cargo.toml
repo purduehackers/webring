@@ -16,6 +16,7 @@ pedantic = { level = "warn", priority = -1 }
 
 [dependencies]
 axum = "0.8.4"
+chrono = "0.4.41"
 clap = { version = "4.5.38", features = ["derive"] }
 eyre = "0.6.12"
 ftail = "0.3.0"
@@ -23,6 +24,8 @@ futures = "0.3.31"
 html-escape = "0.2.13"
 log = "0.4.27"
 rand = "0.9.1"
+reqwest = "0.12.15"
+surge-ping = "0.8.2"
 tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread"] }
 tower-http = { version = "0.6.4", features = ["cors", "fs"] }
 

@@ -13,6 +13,7 @@ use ftail::Ftail;
 use log::{LevelFilter, error, info};
 use routes::create_router;
 
+mod checking;
 mod render_homepage;
 mod routes;
 mod webring;

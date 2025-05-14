@@ -14,16 +14,10 @@ use rand::seq::SliceRandom;
 
 use log::warn;
 
-use crate::render_homepage::Homepage;
-
-#[allow(clippy::unused_async)]
-async fn check(website: &Uri, check_level: CheckLevel) -> eyre::Result<bool> {
-    // TODO
-    Ok(true)
-}
+use crate::{checking::check, render_homepage::Homepage};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CheckLevel {
+pub enum CheckLevel {
     ForLinks,
     JustOnline,
     None,
@@ -45,7 +39,9 @@ impl Member {
         let successful = Arc::clone(&self.check_successful);
 
         async move {
-            successful.store(check(&website, check_level).await?, Ordering::Relaxed);
+            if let Some(v) = check(&website, check_level).await {
+                successful.store(v, Ordering::Relaxed);
+            }
 
             Ok(())
         }

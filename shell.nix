@@ -19,8 +19,10 @@ pkgs.mkShell {
     pkg-config
     rust-analyzer
     sccache
+    openssl.dev
   ]);
 
+  PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig"; 
   RUST_BACKTRACE = 1;
   RUSTC_WRAPPER = "sccache";
 }
