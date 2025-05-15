@@ -23,10 +23,12 @@ ftail = "0.3.0"
 futures = "0.3.31"
 html-escape = "0.2.13"
 log = "0.4.27"
+quick-xml = { version = "0.37.5", features = ["async-tokio"] }
 rand = "0.9.1"
-reqwest = "0.12.15"
+reqwest = { version = "0.12.15", features = ["stream"] }
 surge-ping = "0.8.2"
 tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread"] }
+tokio-util = { version = "0.7.15", features = ["io"] }
 tower-http = { version = "0.6.4", features = ["cors", "fs"] }
 
 [dev-dependencies]
