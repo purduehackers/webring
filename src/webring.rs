@@ -9,12 +9,12 @@ use std::{
 
 use axum::http::{Uri, uri::Authority};
 use eyre::eyre;
-use futures::{StreamExt, stream::FuturesUnordered};
+use futures::{StreamExt, future::join, stream::FuturesUnordered};
 use rand::seq::SliceRandom;
 
 use log::warn;
 
-use crate::{checking::check, render_homepage::Homepage};
+use crate::{checking::check, render_homepage::Homepage, stats::Stats};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheckLevel {
@@ -55,25 +55,38 @@ struct WebringData {
 }
 
 /// The data structure underlying a webring. Implements the core webring functionality.
-#[derive(Clone)]
 pub struct Webring {
     // https://docs.rs/tokio/latest/tokio/sync/struct.Mutex.html#which-kind-of-mutex-should-you-use
     // This is a good case for std locks because we will never need to hold it across an await
-    inner: Arc<RwLock<WebringData>>,
+    inner: RwLock<WebringData>,
     // This one we would like to hold across awaits
-    homepage: Arc<tokio::sync::RwLock<Option<Arc<Homepage>>>>,
-    path: Arc<Path>,
+    homepage: tokio::sync::RwLock<Option<Arc<Homepage>>>,
+    path: PathBuf,
+    stats: Stats,
 }
 
 impl Webring {
     /// Create a webring by parsing the file at the given path.
-    pub async fn new(file: PathBuf) -> eyre::Result<Webring> {
-        let webring_data = parse_file(&file).await?;
-        let webring = Webring {
-            inner: Arc::new(RwLock::new(webring_data)),
-            path: Arc::from(file),
-            homepage: Arc::new(tokio::sync::RwLock::new(None)),
-        };
+    ///
+    /// Leaks the webring object to make a singleton value.
+    ///
+    /// Panics if called twice in the lifetime of the process.
+    pub async fn new(members_file: PathBuf, stats_file: PathBuf) -> eyre::Result<&'static Webring> {
+        static CALLED_NEW_ALREADY: AtomicBool = AtomicBool::new(false);
+
+        assert!(
+            !CALLED_NEW_ALREADY.swap(true, Ordering::Relaxed),
+            "Cannot call Webring::new() twice in the lifetime of the program."
+        );
+
+        let (webring_data, stats) = join(parse_file(&members_file), Stats::new(stats_file)).await;
+
+        let webring = &*Box::leak::<'static>(Box::new(Webring {
+            inner: RwLock::new(webring_data?),
+            path: members_file,
+            homepage: tokio::sync::RwLock::new(None),
+            stats: stats?,
+        }));
 
         webring.check_members().await?;
 
@@ -132,7 +145,7 @@ impl Webring {
         ret
     }
 
-    /// Get the next page in the webring from the given URI; based on the authority part
+    /// Get the next page in the webring from the given URI based on the authority part
     ///
     /// Returns None if the URI has no authority (is relative), the authority was not found in the webring, or all of the webring members failed the check.
     pub fn next_page(&self, uri: &Uri) -> Option<Arc<Uri>> {
@@ -378,9 +391,9 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn test_webring() {
-        let file = NamedTempFile::new().unwrap();
+        let members_file = NamedTempFile::new().unwrap();
         tokio::fs::write(
-            file.path(),
+            members_file.path(),
             "
 henry — hrovnyak.gitlab.io — 123 — None
 kian — kasad.com — 456 — NonE
@@ -390,8 +403,11 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         )
         .await
         .unwrap();
+        let stats_file = NamedTempFile::new().unwrap();
 
-        let webring = Webring::new(file.path().to_owned()).await.unwrap();
+        let webring = Webring::new(members_file.path().to_owned(), stats_file.path().to_owned())
+            .await
+            .unwrap();
 
         {
             let inner = webring.inner.read().unwrap();
@@ -482,7 +498,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         assert_eq!(found_in_random, expected_random);
 
         tokio::fs::write(
-            file.path(),
+            members_file.path(),
             "
 cynthia — https://clementine.viridian.page — 789 — nONE
 henry — hrovnyak.gitlab.io — 123 — None

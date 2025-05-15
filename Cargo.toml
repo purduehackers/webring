@@ -18,6 +18,7 @@ pedantic = { level = "warn", priority = -1 }
 axum = "0.8.4"
 chrono = "0.4.41"
 clap = { version = "4.5.38", features = ["derive"] }
+dashmap = "6.1.0"
 eyre = "0.6.12"
 ftail = "0.3.0"
 futures = "0.3.31"

@@ -16,6 +16,7 @@ use routes::create_router;
 mod checking;
 mod render_homepage;
 mod routes;
+mod stats;
 mod webring;
 
 /// Default log level.
