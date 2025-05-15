@@ -359,6 +359,22 @@ mod tests {
         }
     }
 
+    impl Webring {
+        fn assert_prev(&self, addr: &'static str, prev: impl Into<Option<&'static str>>) {
+            assert_eq!(
+                self.prev_page(&Uri::from_static(addr)),
+                prev.into().map(|v| Arc::new(Uri::from_static(v)))
+            );
+        }
+
+        fn assert_next(&self, addr: &'static str, next: impl Into<Option<&'static str>>) {
+            assert_eq!(
+                self.next_page(&Uri::from_static(addr)),
+                next.into().map(|v| Arc::new(Uri::from_static(v)))
+            );
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn test_webring() {
@@ -421,77 +437,36 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             assert_eq!(inner.ordering, expected_ordering);
         }
 
-        assert_eq!(
-            &*webring
-                .next_page(&Uri::from_static(
-                    "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh"
-                ))
-                .unwrap(),
-            &Uri::from_static("kasad.com")
+        webring.assert_next(
+            "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
+            "kasad.com",
         );
 
-        assert_eq!(
-            &*webring
-                .prev_page(&Uri::from_static(
-                    "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh"
-                ))
-                .unwrap(),
-            &Uri::from_static("ws://refuse-the-r.ing")
+        webring.assert_prev(
+            "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
+            "ws://refuse-the-r.ing",
         );
 
-        assert_eq!(
-            &*webring
-                .next_page(&Uri::from_static("huh://refuse-the-r.ing"))
-                .unwrap(),
-            &Uri::from_static("hrovnyak.gitlab.io")
-        );
-
-        assert!(
-            webring
-                .prev_page(&Uri::from_static("https://kasad.com:3000"))
-                .is_none()
-        );
-
-        assert_eq!(
-            &*webring
-                .next_page(&Uri::from_static("https://kasad.com"))
-                .unwrap(),
-            &Uri::from_static("https://clementine.viridian.page")
-        );
+        webring.assert_next("huh://refuse-the-r.ing", "hrovnyak.gitlab.io");
+        webring.assert_prev("https://kasad.com:3000", None);
+        webring.assert_next("https://kasad.com", "https://clementine.viridian.page");
 
         webring.inner.write().unwrap().ordering[0]
             .check_successful
             .store(false, Ordering::Relaxed);
 
-        assert_eq!(
-            &*webring
-                .next_page(&Uri::from_static(
-                    "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh"
-                ))
-                .unwrap(),
-            &Uri::from_static("kasad.com")
+        webring.assert_next(
+            "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
+            "kasad.com",
         );
 
-        assert_eq!(
-            &*webring
-                .prev_page(&Uri::from_static(
-                    "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh"
-                ))
-                .unwrap(),
-            &Uri::from_static("ws://refuse-the-r.ing")
+        webring.assert_prev(
+            "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
+            "ws://refuse-the-r.ing",
         );
 
-        assert_eq!(
-            &*webring
-                .next_page(&Uri::from_static("refuse-the-r.ing"))
-                .unwrap(),
-            &Uri::from_static("kasad.com")
-        );
-
-        assert_eq!(
-            &*webring.prev_page(&Uri::from_static("kasad.com")).unwrap(),
-            &Uri::from_static("ws://refuse-the-r.ing")
-        );
+        webring.assert_next("refuse-the-r.ing", "kasad.com");
+        webring.assert_prev("kasad.com", "ws://refuse-the-r.ing");
 
         let mut found_in_random = HashSet::new();
 
@@ -521,35 +496,10 @@ kian — kasad.com — 456 — NonE
 
         webring.update_from_file().await.unwrap();
 
-        assert_eq!(
-            &*webring
-                .next_page(&Uri::from_static("clementine.viridian.page"))
-                .unwrap(),
-            &Uri::from_static("http://refuse-the-r.ing")
-        );
-
-        assert_eq!(
-            &*webring
-                .next_page(&Uri::from_static("hrovnyak.gitlab.io"))
-                .unwrap(),
-            &Uri::from_static("http://refuse-the-r.ing")
-        );
-
-        assert_eq!(
-            &*webring
-                .next_page(&Uri::from_static("refuse-the-r.ing"))
-                .unwrap(),
-            &Uri::from_static("arhan.sh")
-        );
-
-        assert_eq!(
-            &*webring.next_page(&Uri::from_static("arhan.sh")).unwrap(),
-            &Uri::from_static("kasad.com")
-        );
-
-        assert_eq!(
-            &*webring.next_page(&Uri::from_static("kasad.com")).unwrap(),
-            &Uri::from_static("https://clementine.viridian.page")
-        );
+        webring.assert_next("clementine.viridian.page", "http://refuse-the-r.ing");
+        webring.assert_next("hrovnyak.gitlab.io", "http://refuse-the-r.ing");
+        webring.assert_next("refuse-the-r.ing", "arhan.sh");
+        webring.assert_next("arhan.sh", "kasad.com");
+        webring.assert_next("kasad.com", "https://clementine.viridian.page");
     }
 }

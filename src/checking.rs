@@ -1,15 +1,12 @@
 use std::{error::Error, fmt::Display, io::ErrorKind, sync::LazyLock};
 
-use axum::{
-    body::Bytes,
-    http::{
-        Uri,
-        uri::{Authority, PathAndQuery, Scheme},
-    },
+use axum::http::{
+    Uri,
+    uri::{Authority, Scheme},
 };
 use chrono::Utc;
 use eyre::Report;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use log::{error, info};
 use quick_xml::{Reader, events::Event};
 use tokio::sync::RwLock;
@@ -90,7 +87,11 @@ async fn check_impl(website: &Uri, check_level: CheckLevel) -> eyre::Result<()> 
 
             let stream = res.bytes_stream();
 
-            match contains_link(stream).await {
+            match contains_link(StreamReader::new(
+                stream.map_err(|e| std::io::Error::new(ErrorKind::Other, e)),
+            ))
+            .await
+            {
                 None => Ok(()),
                 Some(links) => Err(Report::new(links)),
             }
@@ -107,7 +108,7 @@ async fn check_impl(website: &Uri, check_level: CheckLevel) -> eyre::Result<()> 
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MissingLinks {
     pub home: bool,
     pub next: bool,
@@ -116,24 +117,23 @@ pub struct MissingLinks {
 
 impl MissingLinks {
     fn found_link(&mut self, link: &Uri) {
-        static LINKS: LazyLock<(Authority,)> = LazyLock::new(|| (Authority::from_static(ADDRESS),));
-
-        let (links,) = &*LINKS;
+        static AUTHORITY: LazyLock<Authority> =
+            LazyLock::new(|| Uri::from_static(ADDRESS).into_parts().authority.unwrap());
 
         if ![None, Some(&Scheme::HTTPS), Some(&Scheme::HTTP)].contains(&link.scheme()) {
             return;
         }
 
-        if link.authority() != Some(links) {
+        if link.authority() != Some(&*AUTHORITY) {
             return;
         }
 
-        let path = link.path();
+        let path = link.path().trim_matches('/');
 
         match path {
-            "/" => self.home = false,
-            "/next" => self.next = false,
-            "/prev" => self.prev = false,
+            "" => self.home = false,
+            "next" => self.next = false,
+            "prev" => self.prev = false,
             _ => {}
         }
     }
@@ -164,12 +164,8 @@ impl Display for MissingLinks {
 
 impl Error for MissingLinks {}
 
-async fn contains_link(
-    webpage: impl Stream<Item = reqwest::Result<Bytes>> + Unpin,
-) -> Option<MissingLinks> {
-    let mut reader = Reader::from_reader(StreamReader::new(
-        webpage.map_err(|e| std::io::Error::new(ErrorKind::Other, e)),
-    ));
+async fn contains_link(webpage: impl tokio::io::AsyncBufRead + Unpin) -> Option<MissingLinks> {
+    let mut reader = Reader::from_reader(webpage);
 
     let decoder = reader.decoder();
 
@@ -182,6 +178,10 @@ async fn contains_link(
     let mut buf = Vec::new();
 
     while let Ok(event) = reader.read_event_into_async(&mut buf).await {
+        if let Event::Eof = event {
+            break;
+        }
+
         if let Event::Start(tag) = event {
             if tag.name().0 == b"a" {
                 let Ok(Some(attr)) = tag.try_get_attribute("href") else {
@@ -221,4 +221,131 @@ async fn contains_link(
     }
 
     Some(missing_links)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ADDRESS, MissingLinks, contains_link};
+
+    async fn assert_links_gives(file: &str, res: impl Into<Option<(bool, bool, bool)>>) {
+        assert_eq!(
+            contains_link(file.replace("ADDRESS", ADDRESS).as_bytes()).await,
+            res.into()
+                .map(|(home, prev, next)| MissingLinks { home, next, prev })
+        );
+    }
+
+    #[tokio::test]
+    async fn all_links() {
+        assert_links_gives(
+            "<body>
+                <a href=\"ADDRESS/\"></a>
+                <a href=\"ADDRESS/prev\"></a>
+                <a href=\"ADDRESS/next\"></a>
+            </body>",
+            None,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn just_home() {
+        assert_links_gives(
+            "<div>
+                <a href=\"ADDRESS\"></a>
+            </div>",
+            (false, true, true),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn just_prev() {
+        assert_links_gives(
+            "<carousel>
+                <a href=\"ADDRESS/prev?query=huh\"></a>
+            </carousel>",
+            (true, false, true),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn just_next() {
+        assert_links_gives(
+            "<body>
+                <a href=\"ADDRESS/next/\"></a>
+            </body>",
+            (true, true, false),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn random_links() {
+        assert_links_gives(
+            "
+            <!-- ADDRESSS -->
+            <!-- ADDRESSS/prev -->
+            <!-- ADDRESSS/next -->
+            <a href=\"ADDRESS/bruh/\"></a>
+            <a href=\"https://goggle.com\"></a>
+            <a href=\"https://google.com\"></a>
+            <a href=\"https://gooolo.com\"></a>
+            <a href=\"wherever.wherever/home\"></a>
+            <a href=\"wherever.wherever/prev\"></a>
+            <a href=\"wherever.wherever/next\"></a>
+            <b href=\"ADDRESS\"></b>
+            <b href=\"ADDRESS/prev\"></b>
+            <b href=\"ADDRESS/next\"></b>",
+            (true, true, true),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn alternate_elements_all() {
+        assert_links_gives(
+            "<table>
+                <b data-phwebring=\"home\"></b>
+                <b data-phwebring=\"next\"></b>
+                <b data-phwebring=\"prev\"></b>
+            </table>",
+            None,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn alternate_elements_just_home() {
+        assert_links_gives(
+            "<div>
+                <b data-phwebring=\"home\"></b>
+            </div>",
+            (false, true, true),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn alternate_elements_just_prev() {
+        assert_links_gives(
+            "<body>
+                <b data-phwebring=\"prev\"></b>
+            </body>",
+            (true, false, true),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn alternate_elements_just_next() {
+        assert_links_gives(
+            "<body>
+                <b data-phwebring=\"next\"></b>
+            </body>",
+            (true, true, false),
+        )
+        .await;
+    }
 }
