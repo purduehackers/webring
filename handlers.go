@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -46,12 +47,27 @@ func (m model) root(writer http.ResponseWriter, request *http.Request) {
 	}
 }
 
+// Yes, "referrer" is misspelled because that's how the HTTP header is spelled
+func getHostFromReferer(request *http.Request) (string, error) {
+	referer := request.Header.Get("Referer")
+	url, err := url.Parse(referer)
+	if err != nil {
+		return "", err
+	}
+	return url.Host, nil
+}
+
 // Redirects the visitor to the next member, wrapping around the list if the
 // next would be out-of-bounds, and ensuring the destination returns a 200 OK
 // status before performing the redirect.
 func (m model) next(writer http.ResponseWriter, request *http.Request) {
 	m.tryUpdateRing()
 	host := request.URL.Query().Get("host")
+	if host == "" {
+		if newhost, err := getHostFromReferer(request); err == nil {
+			host = newhost
+		}
+	}
 	scheme := "https://"
 	length := len(m.ring)
 	for i, item := range m.ring {
@@ -82,6 +98,11 @@ please `+*flagContactString, 500)
 func (m model) previous(writer http.ResponseWriter, request *http.Request) {
 	m.tryUpdateRing()
 	host := request.URL.Query().Get("host")
+	if host == "" {
+		if newhost, err := getHostFromReferer(request); err == nil {
+			host = newhost
+		}
+	}
 	scheme := "https://"
 	length := len(m.ring)
 	for i, item := range m.ring {

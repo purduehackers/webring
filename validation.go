@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -88,44 +89,8 @@ func (m *model) validateMembers() {
 			continue
 		}
 
-		// Make sure the base link is last, since that's a substring of the
-		// other two links, and we're tracking the match positions.
-		requiredLinks := []string{
-			"https://" + *flagHost + "/next?host=" + url.QueryEscape(site.url),
-			"https://" + *flagHost + "/previous?host=" + url.QueryEscape(site.url),
-			"https://" + *flagHost,
-		}
-		foundPositions := make([]int, len(requiredLinks))
 		decodedBody := html.UnescapeString(string(body))
-		for i, link := range requiredLinks {
-			found := false
-			offsetPos := 0
-			for {
-				pos := strings.Index(decodedBody[offsetPos:], link)
-				if pos == -1 {
-					break
-				}
-				// Check if this position has already been used
-				absolutePos := offsetPos + pos
-				positionUsed := false
-				for _, usedPos := range foundPositions[:i] {
-					if usedPos == absolutePos {
-						positionUsed = true
-						break
-					}
-				}
-				if !positionUsed {
-					foundPositions[i] = absolutePos
-					found = true
-					break
-				}
-				// Continue searching from after this match
-				offsetPos += pos + len(link)
-			}
-			if !found {
-				issues = append(issues, fmt.Sprintf("Site is missing <%s>", link))
-			}
-		}
+		issues = append(issues, checkHtmlForIssues(site, decodedBody)...)
 
 		if len(issues) > 0 {
 			report += siteReportHeader
@@ -171,6 +136,49 @@ func (m *model) validateMembers() {
 		}
 		slog.Info("Validation report written", "date", today, "notifs_dispatched", notifsSent)
 	}
+}
+
+func checkHtmlForIssues(site ring, html string) []string {
+	issues := make([]string, 0)
+		// Make sure the base link is last, since that's a substring of the
+		// other two links, and we're tracking the match positions.
+		requiredLinks := [][]string{
+			{
+				"https://" + *flagHost + "/next?host=" + url.QueryEscape(site.url),
+				"https://" + *flagHost + "/next",
+			},
+			{
+				"https://" + *flagHost + "/previous?host=" + url.QueryEscape(site.url),
+				"https://" + *flagHost + "/previous",
+			},
+			{"https://" + *flagHost},
+		}
+		foundPositions := make([]int, len(requiredLinks))
+		for i, choices := range requiredLinks {
+			found := false
+			for _, link := range choices {
+				offsetPos := 0
+				for {
+					pos := strings.Index(html[offsetPos:], link)
+					if pos == -1 {
+						break
+					}
+					// Check if this position has already been used
+					absolutePos := offsetPos + pos
+					if !slices.Contains(foundPositions[:i], absolutePos) {
+						foundPositions[i] = absolutePos
+						found = true
+						break
+					}
+					// Continue searching from after this match
+					offsetPos += pos + len(link)
+				}
+			}
+			if !found {
+				issues = append(issues, fmt.Sprintf("Site is missing <%s>", choices[len(choices) - 1]))
+			}
+		}
+	return issues
 }
 
 func formatIssues(issues []string) string {
