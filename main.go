@@ -84,6 +84,7 @@ func main() {
 	mux.HandleFunc("/random", m.random)
 	mux.HandleFunc("/"+filepath.Base(*flagValidationLog), m.validationLog)
 	mux.HandleFunc("/healthcheck", m.healthCheck)
+	mux.HandleFunc("/referer-check", RefererCheck)
 
 	fileHandler := http.StripPrefix("/static/", http.FileServer(http.Dir("static")))
 	mux.Handle("/static/", fileHandler)
