@@ -15,7 +15,7 @@ use routes::create_router;
 use webring::Webring;
 
 mod checking;
-mod render_homepage;
+mod homepage;
 mod routes;
 mod stats;
 mod webring;
@@ -117,7 +117,13 @@ async fn main() -> ExitCode {
     }
 
     // Create webring data structure
-    let webring = match Webring::new(cli.members_file.clone(), cli.stats_file.clone()).await {
+    let webring = match Webring::new(
+        cli.members_file.clone(),
+        cli.stats_file.clone(),
+        cli.static_dir.clone(),
+    )
+    .await
+    {
         Ok(w) => w,
         Err(err) => {
             error!("Failed to create webring: {err}");
