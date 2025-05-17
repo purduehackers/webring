@@ -194,8 +194,12 @@ impl Webring {
 
     /// Get a random page in the webring.
     ///
+    /// If the `origin` has a value, the returned page will be different from the one referred to
+    /// by the value. This prevents a user who has a `/random` link on their site from being sent
+    /// back to the site they came from.
+    ///
     /// Returns None if all of the webring members failed the check.
-    pub fn random_page(&self) -> Option<Arc<Uri>> {
+    pub fn random_page(&self, origin: Option<&Uri>) -> Option<Arc<Uri>> {
         let inner = self.inner.read().unwrap();
         let mut range = (0..inner.ordering.len()).collect::<Vec<_>>();
         let mut range = &mut *range;
@@ -209,6 +213,9 @@ impl Webring {
             if inner.ordering[chosen]
                 .check_successful
                 .load(Ordering::Relaxed)
+                && origin.is_none_or(|origin| {
+                    origin.authority() != inner.ordering[chosen].website.authority()
+                })
             {
                 return Some(Arc::clone(&inner.ordering[chosen].website));
             }
@@ -488,15 +495,37 @@ cynthia — https://clementine.viridian.page — 789 — nONE
 
         let mut found_in_random = HashSet::new();
 
+        // Test random with a specified origin matching a site
+        let origin = Uri::from_static("ws://refuse-the-r.ing");
         for _ in 0..200 {
-            found_in_random.insert((*webring.random_page().unwrap()).clone());
+            found_in_random.insert((*webring.random_page(Some(&origin)).unwrap()).clone());
         }
+        let mut expected_random = HashSet::new();
+        expected_random.insert(Uri::from_static("kasad.com"));
+        expected_random.insert(Uri::from_static("https://clementine.viridian.page"));
+        assert_eq!(found_in_random, expected_random);
 
+        // Test random without a specified origin
+        found_in_random.clear();
+        for _ in 0..200 {
+            found_in_random.insert((*webring.random_page(None).unwrap()).clone());
+        }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
         expected_random.insert(Uri::from_static("https://clementine.viridian.page"));
         expected_random.insert(Uri::from_static("ws://refuse-the-r.ing"));
+        assert_eq!(found_in_random, expected_random);
 
+        // Test random with a specified origin not matching any site
+        let origin = Uri::from_static("https://ring.purduehackers.com");
+        found_in_random.clear();
+        for _ in 0..200 {
+            found_in_random.insert((*webring.random_page(Some(&origin)).unwrap()).clone());
+        }
+        let mut expected_random = HashSet::new();
+        expected_random.insert(Uri::from_static("kasad.com"));
+        expected_random.insert(Uri::from_static("https://clementine.viridian.page"));
+        expected_random.insert(Uri::from_static("ws://refuse-the-r.ing"));
         assert_eq!(found_in_random, expected_random);
 
         tokio::fs::write(

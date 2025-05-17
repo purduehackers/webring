@@ -30,6 +30,7 @@ pub fn create_router(cli: &CliOptions) -> Router<&'static Webring> {
         // Support /prev and /previous as aliases of each other
         .route("/prev", get(serve_previous))
         .route("/previous", get(serve_previous))
+        .route("/random", get(serve_random))
 }
 
 async fn serve_index(State(webring): State<&Webring>) -> Result<Response, HomepageError> {
@@ -73,6 +74,26 @@ async fn serve_previous(
     let origin = get_origin_from_request(&headers, &params)?;
     // FIXME: Differentiate between origin not found and all sites failing checks
     match webring.prev_page(&origin) {
+        Some(page) => Ok(Redirect::to(page.to_string().as_str())),
+        None => Err((StatusCode::SERVICE_UNAVAILABLE, "No suitable sites found").into_response()),
+    }
+}
+
+/// Serve the `/random` endpoint.
+///
+/// For each request, this function:
+/// 1. Gets the origin using [`get_origin_from_request()`], ignoring errors.
+/// 2. Finds a random site in the [`Webring`] not matching the origin (if present).
+/// 3. Redirects to the site found.
+///
+/// If finding a random site fails, an HTTP 502 (Service Unavailable) response is sent.
+async fn serve_random(
+    State(webring): State<&Webring>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Redirect, Response> {
+    let maybe_origin = get_origin_from_request(&headers, &params).ok();
+    match webring.random_page(maybe_origin.as_ref()) {
         Some(page) => Ok(Redirect::to(page.to_string().as_str())),
         None => Err((StatusCode::SERVICE_UNAVAILABLE, "No suitable sites found").into_response()),
     }
