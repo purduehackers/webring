@@ -34,7 +34,12 @@
 					</tr>
 				</thead>
 				<tbody>
-					{{ . }}
+					{% for member in members %}
+						<tr>
+							<td>{{ member.name }}</td>
+							<td><a href="{{ member.href }}">{{ member.url }}</a></td>
+						</tr>
+					{% endfor %}
 				</tbody>
 			</table>
 		</div>

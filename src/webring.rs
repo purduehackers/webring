@@ -13,9 +13,10 @@ use futures::{StreamExt, future::join, stream::FuturesUnordered};
 use rand::seq::SliceRandom;
 
 use log::warn;
+use serde::Serialize;
 use thiserror::Error;
 
-use crate::{checking::check, render_homepage::Homepage, stats::Stats};
+use crate::{checking::check, homepage::Homepage, stats::Stats};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheckLevel {
@@ -63,7 +64,8 @@ pub struct Webring {
     inner: RwLock<WebringData>,
     // This one we would like to hold across awaits
     homepage: tokio::sync::RwLock<Option<Arc<Homepage>>>,
-    path: PathBuf,
+    members_file_path: PathBuf,
+    static_dir_path: PathBuf,
     stats: Stats,
 }
 
@@ -73,7 +75,11 @@ impl Webring {
     /// Leaks the webring object to make a singleton value.
     ///
     /// Panics if called twice in the lifetime of the process.
-    pub async fn new(members_file: PathBuf, stats_file: PathBuf) -> eyre::Result<&'static Webring> {
+    pub async fn new(
+        members_file: PathBuf,
+        stats_file: PathBuf,
+        static_dir: PathBuf,
+    ) -> eyre::Result<&'static Webring> {
         static CALLED_NEW_ALREADY: AtomicBool = AtomicBool::new(false);
 
         assert!(
@@ -85,7 +91,8 @@ impl Webring {
 
         let webring = &*Box::leak::<'static>(Box::new(Webring {
             inner: RwLock::new(webring_data?),
-            path: members_file,
+            members_file_path: members_file,
+            static_dir_path: static_dir,
             homepage: tokio::sync::RwLock::new(None),
             stats: stats?,
         }));
@@ -99,7 +106,7 @@ impl Webring {
     ///
     /// Useful for updating the webring without restarting the server.
     pub async fn update_from_file(&self) -> eyre::Result<()> {
-        let mut new_members = parse_file(&self.path).await?;
+        let mut new_members = parse_file(&self.members_file_path).await?;
         let tasks = FuturesUnordered::new();
 
         {
@@ -268,15 +275,39 @@ impl Webring {
                 inner
                     .ordering
                     .iter()
-                    .map(|member_info| MemberForHomepage {
-                        name: member_info.name.clone(),
-                        website: (*member_info.website).clone(),
-                        check_successful: member_info.check_successful.load(Ordering::Relaxed),
+                    .map(|member_info| {
+                        // Get scheme or default to HTTPS for constructing href
+                        let scheme = member_info.website.scheme_str().unwrap_or("https");
+                        // Construct display URL from authority and path if present
+                        let mut url_without_scheme =
+                            member_info.website.authority().unwrap().to_string();
+                        if member_info
+                            .website
+                            .path_and_query()
+                            .is_some_and(|p| p.as_str() != "/")
+                        {
+                            url_without_scheme
+                                .push_str(member_info.website.path_and_query().unwrap().as_str());
+                        }
+                        let href = format!("{scheme}://{url_without_scheme}");
+                        // Use scheme-less URL if the scheme is HTTP or HTTPS, otherwise include
+                        // the scheme in the display url
+                        let url = if scheme == "http" || scheme == "https" {
+                            url_without_scheme
+                        } else {
+                            href.clone()
+                        };
+                        MemberForHomepage {
+                            name: member_info.name.clone(),
+                            href,
+                            url,
+                            check_successful: member_info.check_successful.load(Ordering::Relaxed),
+                        }
                     })
                     .collect::<Vec<_>>()
             };
 
-            let homepage = Arc::new(Homepage::new(&members).await?);
+            let homepage = Arc::new(Homepage::new(&self.static_dir_path, &members).await?);
 
             *maybe_homepage = Some(Arc::clone(&homepage));
 
@@ -285,10 +316,11 @@ impl Webring {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct MemberForHomepage {
     pub name: String,
-    pub website: Uri,
+    pub href: String,
+    pub url: String,
     pub check_successful: bool,
 }
 
@@ -394,7 +426,7 @@ mod tests {
     };
 
     use axum::http::{Uri, uri::Authority};
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     use crate::webring::{CheckLevel, Webring};
 
@@ -451,10 +483,15 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         .await
         .unwrap();
         let stats_file = NamedTempFile::new().unwrap();
+        let static_dir = TempDir::new().unwrap();
 
-        let webring = Webring::new(members_file.path().to_owned(), stats_file.path().to_owned())
-            .await
-            .unwrap();
+        let webring = Webring::new(
+            members_file.path().to_owned(),
+            stats_file.path().to_owned(),
+            static_dir.path().to_owned(),
+        )
+        .await
+        .unwrap();
 
         {
             let inner = webring.inner.read().unwrap();
