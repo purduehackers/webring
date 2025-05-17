@@ -1,7 +1,10 @@
 use std::fmt::Write;
 
+use axum::http::uri::PathAndQuery;
+
 use crate::webring::MemberForHomepage;
 
+#[derive(Clone, Debug)]
 pub struct Homepage {
     html: String,
 }
@@ -25,8 +28,12 @@ impl Homepage {
         for member in members {
             let mut rendered_url = String::new();
             rendered_url.push_str(member.website.authority().unwrap().as_str());
-            let path_query = member.website.path_and_query().unwrap().as_str();
-            if !path_query.is_empty() && path_query != "/" {
+            if member
+                .website
+                .path_and_query()
+                .map(PathAndQuery::as_str)
+                .is_some_and(|path_query| !path_query.is_empty() && path_query != "/")
+            {
                 rendered_url.push_str(member.website.path());
             }
 

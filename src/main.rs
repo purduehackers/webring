@@ -12,6 +12,7 @@ use clap::{Parser, ValueEnum};
 use ftail::Ftail;
 use log::{LevelFilter, error, info};
 use routes::create_router;
+use webring::Webring;
 
 mod checking;
 mod render_homepage;
@@ -48,6 +49,14 @@ struct CliOptions {
     /// File to read more arguments from
     #[arg(short = 'f', long)]
     arg_file: Option<PathBuf>,
+
+    /// File to read member database from
+    #[arg(short = 'm', long)]
+    members_file: PathBuf,
+
+    /// File to write statistics to
+    #[arg(short, long)]
+    stats_file: PathBuf,
 }
 
 // This type exists so clap can figure out what variants are available for the verbosity option.
@@ -107,8 +116,17 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Create webring data structure
+    let webring = match Webring::new(cli.members_file.clone(), cli.stats_file.clone()).await {
+        Ok(w) => w,
+        Err(err) => {
+            error!("Failed to create webring: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     // Start server
-    let router = create_router(&cli);
+    let router = create_router(&cli).with_state(webring);
     let bind_addr = &cli.listen_addr;
     match tokio::net::TcpListener::bind(bind_addr).await {
         // Unwrapping this is fine because it will never resolve

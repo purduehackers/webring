@@ -23,7 +23,7 @@ pub enum CheckLevel {
     None,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Member {
     name: String,
     website: Arc<Uri>,
@@ -48,13 +48,14 @@ impl Member {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct WebringData {
     members_table: HashMap<Authority, usize>,
     ordering: Vec<Member>,
 }
 
 /// The data structure underlying a webring. Implements the core webring functionality.
+#[derive(Debug)]
 pub struct Webring {
     // https://docs.rs/tokio/latest/tokio/sync/struct.Mutex.html#which-kind-of-mutex-should-you-use
     // This is a good case for std locks because we will never need to hold it across an await
@@ -260,6 +261,7 @@ impl Webring {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MemberForHomepage {
     pub name: String,
     pub website: Uri,
