@@ -17,7 +17,6 @@ use webring::Webring;
 mod checking;
 mod homepage;
 mod routes;
-mod stats;
 mod webring;
 
 /// Default log level.
@@ -53,10 +52,6 @@ struct CliOptions {
     /// File to read member database from
     #[arg(short = 'm', long)]
     members_file: PathBuf,
-
-    /// File to write statistics to
-    #[arg(short, long)]
-    stats_file: PathBuf,
 }
 
 // This type exists so clap can figure out what variants are available for the verbosity option.
@@ -119,7 +114,6 @@ async fn main() -> ExitCode {
     // Create webring data structure
     let webring = match Webring::new(
         cli.members_file.clone(),
-        cli.stats_file.clone(),
         cli.static_dir.clone(),
     )
     .await

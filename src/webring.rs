@@ -19,7 +19,6 @@ use thiserror::Error;
 use crate::{
     checking::check,
     homepage::{Homepage, MemberForHomepage},
-    stats::Stats,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,7 +69,6 @@ pub struct Webring {
     homepage: tokio::sync::RwLock<Option<Arc<Homepage>>>,
     members_file_path: PathBuf,
     static_dir_path: PathBuf,
-    stats: Stats,
 }
 
 impl Webring {
@@ -81,7 +79,6 @@ impl Webring {
     /// Panics if called twice in the lifetime of the process.
     pub async fn new(
         members_file: PathBuf,
-        stats_file: PathBuf,
         static_dir: PathBuf,
     ) -> eyre::Result<&'static Webring> {
         static CALLED_NEW_ALREADY: AtomicBool = AtomicBool::new(false);
@@ -91,14 +88,13 @@ impl Webring {
             "Cannot call Webring::new() twice in the lifetime of the program."
         );
 
-        let (webring_data, stats) = join(parse_file(&members_file), Stats::new(stats_file)).await;
+        let webring_data = parse_file(&members_file).await;
 
         let webring = &*Box::leak::<'static>(Box::new(Webring {
             inner: RwLock::new(webring_data?),
             members_file_path: members_file,
             static_dir_path: static_dir,
             homepage: tokio::sync::RwLock::new(None),
-            stats: stats?,
         }));
 
         webring.check_members().await?;
@@ -453,12 +449,10 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         )
         .await
         .unwrap();
-        let stats_file = NamedTempFile::new().unwrap();
         let static_dir = TempDir::new().unwrap();
 
         let webring = Webring::new(
             members_file.path().to_owned(),
-            stats_file.path().to_owned(),
             static_dir.path().to_owned(),
         )
         .await
