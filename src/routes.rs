@@ -38,9 +38,13 @@ pub fn create_router(cli: &CliOptions) -> Router<&'static Webring> {
 }
 
 fn create_error_template() -> Tera {
-    let template_src = include_str!("templates/error.html");
+    let html_src = include_str!("templates/error.html");
+    let css_src = include_str!("templates/error.css");
     let mut tera = Tera::default();
-    tera.add_raw_template("error.html", template_src).unwrap();
+    tera.add_raw_templates(vec![
+        ("error.html", html_src),
+        ("error.css", css_src),
+    ]).unwrap();
     tera
 }
 

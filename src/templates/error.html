@@ -3,65 +3,7 @@
     <head>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Internal Server Error — Purdue Hackers webring</title>
-        <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, avenir next,
-                avenir, segoe ui, helvetica neue, Cantarell, Ubuntu, roboto,
-                noto, helvetica, arial, sans-serif;
-            margin: 24px;
-            color: #262426; /* From logo color */
-        }
-        h1, h2 {
-            margin: 0;
-        }
-        h1 {
-            font-size: 64pt;
-            font-weight: 950; /* Extra Black */
-            display: flex;
-            flex-direction: row;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 0 0.3em;
-        }
-        h1 svg {
-            height: 0.8em;
-            flex: 0 0 auto;
-        }
-        h2 {
-            font-size: 40pt;
-            font-weight: 700; /* Bold */
-        }
-        #title-block {
-            margin-bottom: 48px;
-        }
-        code {
-            font-family: Menlo, Consolas, Monaco, Liberation Mono, Lucida
-                Console, monospace;
-            color: #cb4335;
-        }
-        a:link {
-            color: #2874a6;
-        }
-        details > summary {
-            cursor: pointer;
-        }
-        @media (min-width: 640px) {
-            body {
-                margin: 32px;
-            }
-            h1 {
-                font-size: 128pt;
-            }
-            h2 {
-                font-size: 48pt;
-            }
-        }
-        @media (min-width: 768px) {
-            body {
-                margin: 64px;
-            }
-        }
-        </style>
+        <style>{% include "error.css" %}</style>
     </head>
     <body>
         <div id="title-block">
