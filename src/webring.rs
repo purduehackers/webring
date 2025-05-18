@@ -187,8 +187,7 @@ impl Webring {
     }
 
     /// Get the next page in the webring from the given URI based on the authority part
-    pub async fn next_page(&self, uri: &Uri) -> Result<Arc<Uri>, TraverseWebringError> {
-        self.try_update().await;
+    pub fn next_page(&self, uri: &Uri) -> Result<Arc<Uri>, TraverseWebringError> {
         let (mut idx, inner) = self.member_idx_and_lock(uri)?;
 
         // -1 to avoid jumping all the way around the ring to the same page
@@ -209,8 +208,7 @@ impl Webring {
     }
 
     /// Get the previous page in the webring from the given URI; based on the authority part
-    pub async fn prev_page(&self, uri: &Uri) -> Result<Arc<Uri>, TraverseWebringError> {
-        self.try_update().await;
+    pub fn prev_page(&self, uri: &Uri) -> Result<Arc<Uri>, TraverseWebringError> {
         let (mut idx, inner) = self.member_idx_and_lock(uri)?;
 
         // -1 to avoid jumping all the way around the ring to the same page
@@ -235,11 +233,10 @@ impl Webring {
     /// If the `origin` has a value, the returned page will be different from the one referred to
     /// by the value. This prevents a user who has a `/random` link on their site from being sent
     /// back to the site they came from.
-    pub async fn random_page(
+    pub fn random_page(
         &self,
         maybe_origin: Option<&Uri>,
     ) -> Result<Arc<Uri>, TraverseWebringError> {
-        self.try_update().await;
         let (maybe_idx, inner) =
             match maybe_origin.and_then(|origin| self.member_idx_and_lock(origin).ok()) {
                 Some((idx, inner)) => (Some(idx), inner),
@@ -436,24 +433,24 @@ mod tests {
     }
 
     impl Webring {
-        async fn assert_prev(
+        fn assert_prev(
             &self,
             addr: &'static str,
             prev: Result<&'static str, TraverseWebringError>,
         ) {
             assert_eq!(
-                self.prev_page(&Uri::from_static(addr)).await,
+                self.prev_page(&Uri::from_static(addr)),
                 prev.map(|v| Arc::new(Uri::from_static(v)))
             );
         }
 
-        async fn assert_next(
+        fn assert_next(
             &self,
             addr: &'static str,
             next: Result<&'static str, TraverseWebringError>,
         ) {
             assert_eq!(
-                self.next_page(&Uri::from_static(addr)).await,
+                self.next_page(&Uri::from_static(addr)),
                 next.map(|v| Arc::new(Uri::from_static(v)))
             );
         }
@@ -523,74 +520,54 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             assert_eq!(inner.ordering, expected_ordering);
         }
 
-        webring
-            .assert_next(
-                "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
-                Ok("kasad.com"),
-            )
-            .await;
+        webring.assert_next(
+            "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
+            Ok("kasad.com"),
+        );
 
-        webring
-            .assert_prev(
-                "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
-                Ok("ws://refuse-the-r.ing"),
-            )
-            .await;
+        webring.assert_prev(
+            "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
+            Ok("ws://refuse-the-r.ing"),
+        );
 
-        webring
-            .assert_next("huh://refuse-the-r.ing", Ok("hrovnyak.gitlab.io"))
-            .await;
-        webring
-            .assert_prev(
-                "https://kasad.com:3000",
-                Err(TraverseWebringError::AuthorityNotFound(
-                    Authority::from_static("kasad.com:3000"),
-                )),
-            )
-            .await;
-        webring
-            .assert_next("https://kasad.com", Ok("https://clementine.viridian.page"))
-            .await;
-        webring
-            .assert_prev(
+        webring.assert_next("huh://refuse-the-r.ing", Ok("hrovnyak.gitlab.io"));
+        webring.assert_prev(
+            "https://kasad.com:3000",
+            Err(TraverseWebringError::AuthorityNotFound(
+                Authority::from_static("kasad.com:3000"),
+            )),
+        );
+        webring.assert_next("https://kasad.com", Ok("https://clementine.viridian.page"));
+        webring.assert_prev(
+            "/relative/uri",
+            Err(TraverseWebringError::NoAuthority(Uri::from_static(
                 "/relative/uri",
-                Err(TraverseWebringError::NoAuthority(Uri::from_static(
-                    "/relative/uri",
-                ))),
-            )
-            .await;
+            ))),
+        );
 
         webring.inner.write().unwrap().ordering[0]
             .check_successful
             .store(false, Ordering::Relaxed);
 
-        webring
-            .assert_next(
-                "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
-                Ok("kasad.com"),
-            )
-            .await;
+        webring.assert_next(
+            "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
+            Ok("kasad.com"),
+        );
 
-        webring
-            .assert_prev(
-                "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
-                Ok("ws://refuse-the-r.ing"),
-            )
-            .await;
+        webring.assert_prev(
+            "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
+            Ok("ws://refuse-the-r.ing"),
+        );
 
-        webring
-            .assert_next("refuse-the-r.ing", Ok("kasad.com"))
-            .await;
-        webring
-            .assert_prev("kasad.com", Ok("ws://refuse-the-r.ing"))
-            .await;
+        webring.assert_next("refuse-the-r.ing", Ok("kasad.com"));
+        webring.assert_prev("kasad.com", Ok("ws://refuse-the-r.ing"));
 
         let mut found_in_random = HashSet::new();
 
         // Test random with a specified origin matching a site
         let origin = Uri::from_static("ws://refuse-the-r.ing");
         for _ in 0..200 {
-            found_in_random.insert((*webring.random_page(Some(&origin)).await.unwrap()).clone());
+            found_in_random.insert((*webring.random_page(Some(&origin)).unwrap()).clone());
         }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
@@ -600,7 +577,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         // Test random without a specified origin
         found_in_random.clear();
         for _ in 0..200 {
-            found_in_random.insert((*webring.random_page(None).await.unwrap()).clone());
+            found_in_random.insert((*webring.random_page(None).unwrap()).clone());
         }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
@@ -612,7 +589,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         let origin = Uri::from_static("https://ring.purduehackers.com");
         found_in_random.clear();
         for _ in 0..200 {
-            found_in_random.insert((*webring.random_page(Some(&origin)).await.unwrap()).clone());
+            found_in_random.insert((*webring.random_page(Some(&origin)).unwrap()).clone());
         }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
@@ -635,19 +612,11 @@ kian — kasad.com — 456 — NonE
 
         webring.update_from_file().await.unwrap();
 
-        webring
-            .assert_next("clementine.viridian.page", Ok("http://refuse-the-r.ing"))
-            .await;
-        webring
-            .assert_next("hrovnyak.gitlab.io", Ok("http://refuse-the-r.ing"))
-            .await;
-        webring
-            .assert_next("refuse-the-r.ing", Ok("arhan.sh"))
-            .await;
-        webring.assert_next("arhan.sh", Ok("kasad.com")).await;
-        webring
-            .assert_next("kasad.com", Ok("https://clementine.viridian.page"))
-            .await;
+        webring.assert_next("clementine.viridian.page", Ok("http://refuse-the-r.ing"));
+        webring.assert_next("hrovnyak.gitlab.io", Ok("http://refuse-the-r.ing"));
+        webring.assert_next("refuse-the-r.ing", Ok("arhan.sh"));
+        webring.assert_next("arhan.sh", Ok("kasad.com"));
+        webring.assert_next("kasad.com", Ok("https://clementine.viridian.page"));
 
         for i in 0..5 {
             webring.inner.write().unwrap().ordering[i]
@@ -655,25 +624,19 @@ kian — kasad.com — 456 — NonE
                 .store(false, Ordering::Relaxed);
         }
 
-        webring
-            .assert_next("kasad.com", Err(TraverseWebringError::AllMembersFailing))
-            .await;
-        webring
-            .assert_prev(
-                "clementine.viridian.page",
-                Err(TraverseWebringError::AllMembersFailing),
-            )
-            .await;
+        webring.assert_next("kasad.com", Err(TraverseWebringError::AllMembersFailing));
+        webring.assert_prev(
+            "clementine.viridian.page",
+            Err(TraverseWebringError::AllMembersFailing),
+        );
         assert_eq!(
-            webring.random_page(None).await,
+            webring.random_page(None),
             Err(TraverseWebringError::AllMembersFailing)
         );
-        webring
-            .assert_prev(
-                "clementine.viridian.page",
-                Err(TraverseWebringError::AllMembersFailing),
-            )
-            .await;
+        webring.assert_prev(
+            "clementine.viridian.page",
+            Err(TraverseWebringError::AllMembersFailing),
+        );
 
         webring.inner.write().unwrap().ordering[3]
             .check_successful
@@ -681,22 +644,16 @@ kian — kasad.com — 456 — NonE
 
         for _ in 0..200 {
             assert_eq!(
-                webring.random_page(None).await,
+                webring.random_page(None),
                 Ok(Arc::new(Uri::from_static("arhan.sh")))
             );
         }
 
-        webring
-            .assert_prev("arhan.sh", Err(TraverseWebringError::AllMembersFailing))
-            .await;
-        webring
-            .assert_next("arhan.sh", Err(TraverseWebringError::AllMembersFailing))
-            .await;
+        webring.assert_prev("arhan.sh", Err(TraverseWebringError::AllMembersFailing));
+        webring.assert_next("arhan.sh", Err(TraverseWebringError::AllMembersFailing));
 
-        webring
-            .assert_prev("refuse-the-r.ing", Ok("arhan.sh"))
-            .await;
-        webring.assert_next("kasad.com", Ok("arhan.sh")).await;
+        webring.assert_prev("refuse-the-r.ing", Ok("arhan.sh"));
+        webring.assert_next("kasad.com", Ok("arhan.sh"));
     }
 
     #[tokio::test]

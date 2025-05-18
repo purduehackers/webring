@@ -86,6 +86,7 @@ fn create_error_template() -> Tera {
 }
 
 async fn serve_index(State(webring): State<Arc<Webring>>) -> Result<Response, RouteError> {
+    webring.try_update().await;
     Ok(Html(webring.homepage().await?.to_html().to_owned()).into_response())
 }
 
@@ -103,7 +104,8 @@ async fn serve_next(
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Redirect, RouteError> {
     let origin = get_origin_from_request(headers, params)?;
-    let page = webring.next_page(&origin).await?;
+    webring.try_update().await;
+    let page = webring.next_page(&origin)?;
     Ok(Redirect::to(page.to_string().as_str()))
 }
 
@@ -121,7 +123,8 @@ async fn serve_previous(
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Redirect, RouteError> {
     let origin = get_origin_from_request(headers, params)?;
-    let page = webring.prev_page(&origin).await?;
+    webring.try_update().await;
+    let page = webring.prev_page(&origin)?;
     Ok(Redirect::to(page.to_string().as_str()))
 }
 
@@ -139,7 +142,8 @@ async fn serve_random(
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Redirect, RouteError> {
     let maybe_origin = get_origin_from_request(headers, params).ok();
-    let page = webring.random_page(maybe_origin.as_ref()).await?;
+    webring.try_update().await;
+    let page = webring.random_page(maybe_origin.as_ref())?;
     Ok(Redirect::to(page.to_string().as_str()))
 }
 
