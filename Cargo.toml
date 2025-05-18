@@ -29,10 +29,12 @@ rand = "0.9.1"
 reqwest = { version = "0.12.15", features = ["stream"] }
 serde = { version = "1.0.219", features = ["derive"] }
 surge-ping = "0.8.2"
+tera = "1.20.0"
 thiserror = "2.0.12"
 tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread"] }
 tokio-util = { version = "0.7.15", features = ["io"] }
 tower-http = { version = "0.6.4", features = ["cors", "fs"] }
 
 [dev-dependencies]
+pretty_assertions = "1.4.1"
 tempfile = "3.20.0"
