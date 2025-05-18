@@ -7,6 +7,7 @@ use std::{
     path::PathBuf,
     process::ExitCode,
     sync::Arc,
+    time::Duration,
 };
 
 use clap::{Parser, ValueEnum};
@@ -113,7 +114,13 @@ async fn main() -> ExitCode {
     }
 
     // Create webring data structure
-    let webring = match Webring::new(cli.members_file.clone(), cli.static_dir.clone()).await {
+    let webring = match Webring::new(
+        cli.members_file.clone(),
+        cli.static_dir.clone(),
+        Duration::from_secs(60),
+    )
+    .await
+    {
         Ok(w) => w,
         Err(err) => {
             error!("Failed to create webring: {err}");
