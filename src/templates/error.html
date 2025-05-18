@@ -66,7 +66,7 @@ E.g.: Which path did you visit (`/`, `/next`, `/random`, etc.)? Which site did y
 ```
 " ~ error ~ "
 ```" %}
-                <a href="{{ cargo_pkg_repository }}/issues/new?labels=bug&title={{ title | urlencode_strict }}&body={{ body | urlencode_strict }}"
+                <a href="{{ cargo_pkg_repository }}/issues/new?labels=bug,auto%20generated&title={{ title | urlencode_strict }}&body={{ body | urlencode_strict }}"
                     >opening an issue on GitHub</a>.
             </p>
         </div>
