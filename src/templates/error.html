@@ -39,6 +39,9 @@
                 Console, monospace;
             color: #cb4335;
         }
+        a:link {
+            color: #2874a6;
+        }
         @media (min-width: 640px) {
             body {
                 margin: 32px;
@@ -89,5 +92,28 @@
             <pre><code>{{ error }}</code></pre>
             </p>
         </div>
+
+        {% if status_code >= 500 and status_code < 600 -%}
+        <div>
+            <h3>Report this error</h3>
+            <p>
+                We might not realize there's a problem.<br>
+                Please let us know by
+                {%- set title = "Bug report: " ~ status_code ~ " " ~ status_text -%}
+                {%- set body = "# Description
+
+Describe what you did that resulted in this error.
+E.g.: Which path did you visit (`/`, `/next`, `/random`, etc.)? Which site did you come from?
+
+# Error
+
+```
+" ~ error ~ "
+```" -%}
+                <a href="{{ cargo_pkg_repository }}/issues/new?labels=bug&title={{ title | urlencode_strict }}&body={{ body | urlencode_strict }}">
+                    opening an issue on GitHub</a>.
+            </p>
+        </div>
+        {%- endif %}
     </body>
 </html>

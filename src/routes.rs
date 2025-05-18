@@ -218,6 +218,7 @@ impl IntoResponse for RouteError {
                 _ => "We're not quite sure.",
             },
         );
+        context.insert("cargo_pkg_repository", env!("CARGO_PKG_REPOSITORY"));
 
         // Render error and chain
         let mut error_explanation = format!("{}", &self);
@@ -240,16 +241,24 @@ mod tests {
     use std::str::FromStr as _;
 
     use axum::{http::Uri, response::IntoResponse};
+    use eyre::eyre;
 
+    use super::{OriginUriLocation, RouteError};
+
+    /// Test rendering src/templates/error.html to make sure it won't panic at runtime.
     #[test]
     fn test_render_error_template() {
+        // Try a 400 error
         let bad_uri = "http:\\\\back.slash\\woah\\there";
-        let error = super::RouteError::InvalidOriginURI {
+        let error = RouteError::InvalidOriginURI {
             uri: bad_uri.to_string(),
             reason: Uri::from_str(bad_uri).unwrap_err(),
-            place: super::OriginUriLocation::RefererHeader,
+            place: OriginUriLocation::RefererHeader,
         };
-        // We just want this to not panic
+        let _ = error.into_response();
+
+        // Try a 500 error
+        let error = RouteError::RenderHomepage(eyre!("Fake rendering error"));
         let _ = error.into_response();
     }
 }
