@@ -1,8 +1,11 @@
 use std::path::Path;
 
+use axum::http::{
+    Uri,
+    uri::{Authority, PathAndQuery},
+};
+use serde::Serialize;
 use tera::Tera;
-
-use crate::webring::MemberForHomepage;
 
 #[derive(Clone, Debug)]
 pub struct Homepage {
@@ -26,14 +29,52 @@ impl Homepage {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct MemberForHomepage {
+    pub name: String,
+    pub website: SerializableUri,
+    pub check_successful: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
+pub struct SerializableUri {
+    /// Scheme name (without `://` part)
+    pub scheme: String,
+    /// Authority (i.e. host and port)
+    pub authority: String,
+    /// Path and query string
+    pub path_and_query: String,
+    /// Full URL, in the format `{scheme}://{authority}{path_and_query}`
+    pub href: String,
+}
+
+impl From<&Uri> for SerializableUri {
+    fn from(value: &Uri) -> Self {
+        let scheme = value.scheme_str().unwrap_or("https").to_string();
+        let authority = value.authority().map_or("", Authority::as_str).to_string();
+        let path_and_query = value
+            .path_and_query()
+            .map_or("/", PathAndQuery::as_str)
+            .to_string();
+        let href = format!("{scheme}://{authority}{path_and_query}");
+        Self {
+            scheme,
+            authority,
+            path_and_query,
+            href,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
+    use axum::http::Uri;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
-    use crate::webring::MemberForHomepage;
-
-    use super::Homepage;
+    use super::{Homepage, MemberForHomepage, SerializableUri};
 
     #[tokio::test]
     async fn test_render_homepage() {
@@ -41,9 +82,9 @@ mod tests {
         let tmpdir = TempDir::new().unwrap();
         let template = r#"
 <table>
-{% for member in members %}
-<tr><td>{{ member.name }}</td><a href="{{ member.href }}">{{ member.url }}</a></td></tr>
-{% endfor %}
+{% for member in members -%}
+<tr><td>{{ member.name }}</td><a href="{{ member.website.href }}">{{ member.website.authority }}</a></td></tr>
+{% endfor -%}
 </table>
 "#;
         tokio::fs::write(tmpdir.path().join("index.html"), template.as_bytes())
@@ -54,14 +95,12 @@ mod tests {
         let members = vec![
             MemberForHomepage {
                 name: s("kian"),
-                href: s("https://kasad.com/"),
-                url: s("kasad.com"),
+                website: u("https://kasad.com/"),
                 check_successful: true,
             },
             MemberForHomepage {
                 name: s("henry"),
-                href: s("https://hrovnyak.gitlab.io/"),
-                url: s("hrovnyak.gitlab.io"),
+                website: u("hrovnyak.gitlab.io"),
                 check_successful: true,
             },
         ];
@@ -71,11 +110,8 @@ mod tests {
         assert_eq!(
             r#"
 <table>
-
 <tr><td>kian</td><a href="https:&#x2F;&#x2F;kasad.com&#x2F;">kasad.com</a></td></tr>
-
 <tr><td>henry</td><a href="https:&#x2F;&#x2F;hrovnyak.gitlab.io&#x2F;">hrovnyak.gitlab.io</a></td></tr>
-
 </table>
 "#,
             html
@@ -85,5 +121,10 @@ mod tests {
     /// Create a [`String`] from a `&str`
     fn s(string: &str) -> String {
         string.to_owned()
+    }
+
+    /// Create a [`SerializableUri`] from a string
+    fn u(s: &str) -> SerializableUri {
+        SerializableUri::from(&Uri::from_str(s).unwrap())
     }
 }

@@ -16,7 +16,11 @@ use log::warn;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::{checking::check, homepage::Homepage, stats::Stats};
+use crate::{
+    checking::check,
+    homepage::{Homepage, MemberForHomepage},
+    stats::Stats,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheckLevel {
@@ -275,34 +279,10 @@ impl Webring {
                 inner
                     .ordering
                     .iter()
-                    .map(|member_info| {
-                        // Get scheme or default to HTTPS for constructing href
-                        let scheme = member_info.website.scheme_str().unwrap_or("https");
-                        // Construct display URL from authority and path if present
-                        let mut url_without_scheme =
-                            member_info.website.authority().unwrap().to_string();
-                        if member_info
-                            .website
-                            .path_and_query()
-                            .is_some_and(|p| p.as_str() != "/")
-                        {
-                            url_without_scheme
-                                .push_str(member_info.website.path_and_query().unwrap().as_str());
-                        }
-                        let href = format!("{scheme}://{url_without_scheme}");
-                        // Use scheme-less URL if the scheme is HTTP or HTTPS, otherwise include
-                        // the scheme in the display url
-                        let url = if scheme == "http" || scheme == "https" {
-                            url_without_scheme
-                        } else {
-                            href.clone()
-                        };
-                        MemberForHomepage {
-                            name: member_info.name.clone(),
-                            href,
-                            url,
-                            check_successful: member_info.check_successful.load(Ordering::Relaxed),
-                        }
+                    .map(|member_info| MemberForHomepage {
+                        name: member_info.name.clone(),
+                        website: member_info.website.as_ref().into(),
+                        check_successful: member_info.check_successful.load(Ordering::Relaxed),
                     })
                     .collect::<Vec<_>>()
             };
@@ -314,14 +294,6 @@ impl Webring {
             Ok(homepage)
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
-pub struct MemberForHomepage {
-    pub name: String,
-    pub href: String,
-    pub url: String,
-    pub check_successful: bool,
 }
 
 async fn collect_errs(
