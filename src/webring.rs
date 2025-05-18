@@ -222,9 +222,10 @@ impl Webring {
     /// If the `origin` has a value, the returned page will be different from the one referred to
     /// by the value. This prevents a user who has a `/random` link on their site from being sent
     /// back to the site they came from.
-    ///
-    /// Returns None if all of the webring members failed the check.
-    pub fn random_page(&self, maybe_origin: Option<&Uri>) -> Option<Arc<Uri>> {
+    pub fn random_page(
+        &self,
+        maybe_origin: Option<&Uri>,
+    ) -> Result<Arc<Uri>, TraverseWebringError> {
         let (maybe_idx, inner) =
             match maybe_origin.and_then(|origin| self.member_idx_and_lock(origin).ok()) {
                 Some((idx, inner)) => (Some(idx), inner),
@@ -245,7 +246,7 @@ impl Webring {
                     .check_successful
                     .load(Ordering::Relaxed)
             {
-                return Some(Arc::clone(&inner.ordering[chosen].website));
+                return Ok(Arc::clone(&inner.ordering[chosen].website));
             }
 
             range = rest;
@@ -253,7 +254,7 @@ impl Webring {
 
         warn!("All webring members are broken???");
 
-        None
+        Err(TraverseWebringError::AllMembersFailing)
     }
 
     /// Return a server-side rendered homepage.
@@ -376,14 +377,12 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum TraverseWebringError {
-    #[error(
-        "The URI does not have an authority component (it is relative rather than absolute): {0}"
-    )]
+    #[error("The given origin URI ({0}) doesn't have a host component")]
     NoAuthority(Uri),
-    #[error("The authority was not found in the webring: {0}")]
+    #[error("The given origin host ({0}) does not appear to be a member of the webring")]
     AuthorityNotFound(Authority),
     /// This may be returned even if the origin URI is passing because jumping to the same URI is undesirable
-    #[error("All possible members fail the webring test")]
+    #[error("All sites in the webring are currently down or failing our status checks")]
     AllMembersFailing,
 }
 
@@ -618,7 +617,10 @@ kian — kasad.com — 456 — NonE
             "clementine.viridian.page",
             Err(TraverseWebringError::AllMembersFailing),
         );
-        assert_eq!(webring.random_page(None), None);
+        assert_eq!(
+            webring.random_page(None),
+            Err(TraverseWebringError::AllMembersFailing)
+        );
         webring.assert_prev(
             "clementine.viridian.page",
             Err(TraverseWebringError::AllMembersFailing),
@@ -631,7 +633,7 @@ kian — kasad.com — 456 — NonE
         for _ in 0..200 {
             assert_eq!(
                 webring.random_page(None),
-                Some(Arc::new(Uri::from_static("arhan.sh")))
+                Ok(Arc::new(Uri::from_static("arhan.sh")))
             );
         }
 
