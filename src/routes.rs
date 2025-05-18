@@ -5,12 +5,19 @@ use std::{
 };
 
 use axum::{
-    body::Body, extract::{Query, State}, http::{uri::InvalidUri, HeaderMap, Uri}, response::{Html, IntoResponse, NoContent, Redirect, Response}, routing::get, Router
+    Router,
+    body::Body,
+    extract::{Query, State},
+    http::{HeaderMap, Uri, uri::InvalidUri},
+    response::{Html, IntoResponse, NoContent, Redirect, Response},
+    routing::get,
 };
 use reqwest::StatusCode;
 use tera::Tera;
 use tower_http::{
-    catch_panic::{CatchPanicLayer, ResponseForPanic}, cors::{Any, CorsLayer}, services::ServeDir
+    catch_panic::{CatchPanicLayer, ResponseForPanic},
+    cors::{Any, CorsLayer},
+    services::ServeDir,
 };
 
 use crate::{
@@ -22,7 +29,7 @@ static ERROR_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_error_template);
 
 /// Creates a [`Router`] with the routes for our application.
 pub fn create_router(cli: &CliOptions) -> Router<&'static Webring> {
-    Router::new()
+    let mut router = Router::new()
         .nest_service("/static", ServeDir::new(&cli.static_dir))
         .route(
             "/healthcheck",
@@ -33,18 +40,30 @@ pub fn create_router(cli: &CliOptions) -> Router<&'static Webring> {
         // Support /prev and /previous as aliases of each other
         .route("/prev", get(serve_previous))
         .route("/previous", get(serve_previous))
-        .route("/random", get(serve_random))
-        .layer(CatchPanicLayer::custom(PanicResponse))
+        .route("/random", get(serve_random));
+
+    // Add debugging routes
+    if cfg!(debug_assertions) {
+        router = router.route(
+            "/debug/panic",
+            get(
+                #[allow(clippy::unused_unit)]
+                async || -> () {
+                    panic!();
+                },
+            ),
+        );
+    }
+
+    router.layer(CatchPanicLayer::custom(PanicResponse))
 }
 
 fn create_error_template() -> Tera {
     let html_src = include_str!("templates/error.html");
     let css_src = include_str!("templates/error.css");
     let mut tera = Tera::default();
-    tera.add_raw_templates(vec![
-        ("error.html", html_src),
-        ("error.css", css_src),
-    ]).unwrap();
+    tera.add_raw_templates(vec![("error.html", html_src), ("error.css", css_src)])
+        .unwrap();
     tera
 }
 
@@ -248,9 +267,17 @@ impl ResponseForPanic for PanicResponse {
     ) -> axum::http::Response<Self::ResponseBody> {
         let mut panic_message = String::new();
         if let Some(name) = std::thread::current().name() {
-            write!(&mut panic_message, "Thread {name} panicked while generating a response: ").unwrap();
+            write!(
+                &mut panic_message,
+                "Thread {name} panicked while generating a response: "
+            )
+            .unwrap();
         } else {
-            write!(&mut panic_message, "Thread panicked while generating a response: ").unwrap();
+            write!(
+                &mut panic_message,
+                "Thread panicked while generating a response: "
+            )
+            .unwrap();
         }
         if let Some(str) = err.downcast_ref::<&str>() {
             panic_message.push_str(str);
