@@ -14,6 +14,7 @@ use clap::{Parser, ValueEnum};
 use ftail::Ftail;
 use log::LevelFilter;
 use routes::create_router;
+use sarlacc::Intern;
 use webring::Webring;
 
 mod checking;
@@ -57,14 +58,14 @@ struct CliOptions {
     members_file: PathBuf,
 
     #[arg(short = 'a', long, default_value = "https://ring.purduehackers.com", value_parser = parse_uri)]
-    address: Uri,
+    address: Intern<Uri>,
 
     /// File to write statistics to
     #[arg(short, long)]
     stats_file: PathBuf,
 }
 
-fn parse_uri(str: &str) -> eyre::Result<Uri> {
+fn parse_uri(str: &str) -> eyre::Result<Intern<Uri>> {
     let uri = str.parse::<Uri>()?;
 
     if !uri.path().trim_matches('/').is_empty() {
@@ -85,7 +86,7 @@ fn parse_uri(str: &str) -> eyre::Result<Uri> {
         ));
     }
 
-    Ok(uri)
+    Ok(Intern::new(uri))
 }
 
 // This type exists so clap can figure out what variants are available for the verbosity option.
@@ -150,7 +151,7 @@ async fn main() -> ExitCode {
         cli.members_file.clone(),
         cli.stats_file.clone(),
         cli.static_dir.clone(),
-        cli.address.clone(),
+        cli.address,
     )
     .await
     {

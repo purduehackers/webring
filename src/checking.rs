@@ -6,6 +6,7 @@ use eyre::Report;
 use futures::TryStreamExt;
 use log::{error, info};
 use quick_xml::{Reader, events::Event};
+use sarlacc::Intern;
 use tokio::sync::RwLock;
 use tokio_util::io::StreamReader;
 
@@ -63,7 +64,11 @@ async fn is_online() -> bool {
 ///
 /// Returns Some with the result, or None if the server seems to be not connected to the internet.
 #[allow(clippy::unused_async)]
-pub async fn check(website: &Uri, check_level: CheckLevel, base_address: Uri) -> Option<bool> {
+pub async fn check(
+    website: &Uri,
+    check_level: CheckLevel,
+    base_address: Intern<Uri>,
+) -> Option<bool> {
     match check_impl(website, check_level, base_address).await {
         Ok(()) => Some(true),
         Err(e) => {
@@ -80,7 +85,11 @@ pub async fn check(website: &Uri, check_level: CheckLevel, base_address: Uri) ->
     }
 }
 
-async fn check_impl(website: &Uri, check_level: CheckLevel, base_address: Uri) -> eyre::Result<()> {
+async fn check_impl(
+    website: &Uri,
+    check_level: CheckLevel,
+    base_address: Intern<Uri>,
+) -> eyre::Result<()> {
     match check_level {
         CheckLevel::ForLinks => {
             let res = reqwest::get(website.to_string())
@@ -116,7 +125,7 @@ async fn check_impl(website: &Uri, check_level: CheckLevel, base_address: Uri) -
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct MissingLinks {
-    base_address: Uri,
+    base_address: Intern<Uri>,
     pub home: bool,
     pub next: bool,
     pub prev: bool,
@@ -174,7 +183,7 @@ impl Error for MissingLinks {}
 
 async fn contains_link(
     webpage: impl tokio::io::AsyncBufRead + Unpin,
-    base_address: Uri,
+    base_address: Intern<Uri>,
 ) -> Option<MissingLinks> {
     // Streams HTML tokens
     let mut reader = Reader::from_reader(webpage);
@@ -247,6 +256,7 @@ async fn contains_link(
 #[cfg(test)]
 mod tests {
     use axum::http::Uri;
+    use sarlacc::Intern;
 
     use super::{MissingLinks, contains_link};
 
@@ -258,14 +268,14 @@ mod tests {
         assert_eq!(
             contains_link(
                 file.replace("ADDRESS", base_address).as_bytes(),
-                Uri::from_static(base_address)
+                Intern::new(Uri::from_static(base_address))
             )
             .await,
             res.into().map(|(home, prev, next)| MissingLinks {
                 home,
                 next,
                 prev,
-                base_address: Uri::from_static(base_address)
+                base_address: Intern::new(Uri::from_static(base_address))
             })
         );
     }

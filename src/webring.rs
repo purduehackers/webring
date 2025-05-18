@@ -14,6 +14,7 @@ use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rand::seq::SliceRandom;
 
 use log::{debug, error, info, warn};
+use sarlacc::Intern;
 use thiserror::Error;
 
 use crate::{
@@ -32,8 +33,7 @@ pub enum CheckLevel {
 #[derive(Clone, Debug)]
 struct Member {
     name: String,
-    website: Arc<Uri>,
-    #[allow(dead_code)] // FIXME: Remove once Discord integration is implemented
+    website: Intern<Uri>,
     discord_id: String,
     check_level: CheckLevel,
     check_successful: Arc<AtomicBool>,
@@ -42,9 +42,9 @@ struct Member {
 impl Member {
     fn check_and_store(
         &self,
-        base_address: Uri,
+        base_address: Intern<Uri>,
     ) -> impl Future<Output = eyre::Result<()>> + Send + 'static {
-        let website = Arc::clone(&self.website);
+        let website = self.website;
         let check_level = self.check_level;
         let successful = Arc::clone(&self.check_successful);
 
@@ -75,7 +75,7 @@ pub struct Webring {
     members_file_path: PathBuf,
     static_dir_path: PathBuf,
     file_watcher: OnceLock<RecommendedWatcher>,
-    base_address: Uri,
+    base_address: Intern<Uri>,
     stats: Stats,
 }
 
@@ -85,7 +85,7 @@ impl Webring {
         members_file: PathBuf,
         stats_file: PathBuf,
         static_dir: PathBuf,
-        base_address: Uri,
+        base_address: Intern<Uri>,
     ) -> eyre::Result<Webring> {
         let (webring_data, stats) = join(parse_file(&members_file), Stats::new(stats_file)).await;
 
@@ -122,9 +122,7 @@ impl Webring {
                         new_members.ordering[*idx].check_successful = check_successful;
                     }
                     None => {
-                        tasks.push(
-                            new_members.ordering[*idx].check_and_store(self.base_address.clone()),
-                        );
+                        tasks.push(new_members.ordering[*idx].check_and_store(self.base_address));
                     }
                 }
             }
@@ -147,7 +145,7 @@ impl Webring {
             let inner = self.inner.read().unwrap();
 
             for member in &inner.ordering {
-                tasks.push(member.check_and_store(self.base_address.clone()));
+                tasks.push(member.check_and_store(self.base_address));
             }
         }
 
@@ -176,7 +174,7 @@ impl Webring {
     }
 
     /// Get the next page in the webring from the given URI based on the authority part
-    pub fn next_page(&self, uri: &Uri) -> Result<Arc<Uri>, TraverseWebringError> {
+    pub fn next_page(&self, uri: &Uri) -> Result<Intern<Uri>, TraverseWebringError> {
         let (mut idx, inner) = self.member_idx_and_lock(uri)?;
 
         // -1 to avoid jumping all the way around the ring to the same page
@@ -187,7 +185,7 @@ impl Webring {
             }
 
             if inner.ordering[idx].check_successful.load(Ordering::Relaxed) {
-                return Ok(Arc::clone(&inner.ordering[idx].website));
+                return Ok(inner.ordering[idx].website);
             }
         }
 
@@ -197,7 +195,7 @@ impl Webring {
     }
 
     /// Get the previous page in the webring from the given URI; based on the authority part
-    pub fn prev_page(&self, uri: &Uri) -> Result<Arc<Uri>, TraverseWebringError> {
+    pub fn prev_page(&self, uri: &Uri) -> Result<Intern<Uri>, TraverseWebringError> {
         let (mut idx, inner) = self.member_idx_and_lock(uri)?;
 
         // -1 to avoid jumping all the way around the ring to the same page
@@ -208,7 +206,7 @@ impl Webring {
             idx -= 1;
 
             if inner.ordering[idx].check_successful.load(Ordering::Relaxed) {
-                return Ok(Arc::clone(&inner.ordering[idx].website));
+                return Ok(inner.ordering[idx].website);
             }
         }
 
@@ -225,7 +223,7 @@ impl Webring {
     pub fn random_page(
         &self,
         maybe_origin: Option<&Uri>,
-    ) -> Result<Arc<Uri>, TraverseWebringError> {
+    ) -> Result<Intern<Uri>, TraverseWebringError> {
         let (maybe_idx, inner) =
             match maybe_origin.and_then(|origin| self.member_idx_and_lock(origin).ok()) {
                 Some((idx, inner)) => (Some(idx), inner),
@@ -246,7 +244,7 @@ impl Webring {
                     .check_successful
                     .load(Ordering::Relaxed)
             {
-                return Ok(Arc::clone(&inner.ordering[chosen].website));
+                return Ok(inner.ordering[chosen].website);
             }
 
             range = rest;
@@ -434,7 +432,7 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
 
         let member = Member {
             name: split[0].to_owned(),
-            website: Arc::from(uri),
+            website: Intern::new(uri),
             discord_id: split[2].to_owned(),
             check_level,
             check_successful: Arc::new(AtomicBool::new(false)),
@@ -473,6 +471,7 @@ mod tests {
     };
 
     use axum::http::{Uri, uri::Authority};
+    use sarlacc::Intern;
     use tempfile::{NamedTempFile, TempDir};
 
     use crate::webring::{CheckLevel, Webring};
@@ -498,7 +497,7 @@ mod tests {
         ) {
             assert_eq!(
                 self.prev_page(&Uri::from_static(addr)),
-                prev.map(|v| Arc::new(Uri::from_static(v)))
+                prev.map(|v| Intern::new(Uri::from_static(v)))
             );
         }
 
@@ -509,7 +508,7 @@ mod tests {
         ) {
             assert_eq!(
                 self.next_page(&Uri::from_static(addr)),
-                next.map(|v| Arc::new(Uri::from_static(v)))
+                next.map(|v| Intern::new(Uri::from_static(v)))
             );
         }
     }
@@ -536,7 +535,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             members_file.path().to_owned(),
             stats_file.path().to_owned(),
             static_dir.path().to_owned(),
-            Uri::from_static("https://ring.purduehackers.com"),
+            Intern::new(Uri::from_static("https://ring.purduehackers.com")),
         )
         .await
         .unwrap();
@@ -555,28 +554,28 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             let expected_ordering = vec![
                 Member {
                     name: "henry".to_owned(),
-                    website: Arc::new(Uri::from_static("hrovnyak.gitlab.io")),
+                    website: Intern::new(Uri::from_static("hrovnyak.gitlab.io")),
                     discord_id: "123".to_owned(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
                 Member {
                     name: "kian".to_owned(),
-                    website: Arc::new(Uri::from_static("kasad.com")),
+                    website: Intern::new(Uri::from_static("kasad.com")),
                     discord_id: "456".to_owned(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
                 Member {
                     name: "cynthia".to_owned(),
-                    website: Arc::new(Uri::from_static("https://clementine.viridian.page")),
+                    website: Intern::new(Uri::from_static("https://clementine.viridian.page")),
                     discord_id: "789".to_owned(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
                 Member {
                     name: "???".to_owned(),
-                    website: Arc::new(Uri::from_static("ws://refuse-the-r.ing")),
+                    website: Intern::new(Uri::from_static("ws://refuse-the-r.ing")),
                     discord_id: "bruh".to_owned(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
@@ -710,7 +709,7 @@ kian — kasad.com — 456 — NonE
         for _ in 0..200 {
             assert_eq!(
                 webring.random_page(None),
-                Ok(Arc::new(Uri::from_static("arhan.sh")))
+                Ok(Intern::new(Uri::from_static("arhan.sh")))
             );
         }
 
@@ -756,7 +755,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE";
                 members_file.clone(),
                 stats_file,
                 static_dir,
-                Uri::from_static("https://ring.purduehackers.com"),
+                Intern::new(Uri::from_static("https://ring.purduehackers.com")),
             )
             .await
             .unwrap(),
