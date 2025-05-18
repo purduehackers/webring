@@ -33,18 +33,20 @@
                 {{ description }}
             </p>
             <h4>Reason</h4>
-            <p>
             {%- set n_lines = (error | split(pat="
 ") | length) -%}
             {% if n_lines > 5 -%}
             <details>
                 <summary>Expand error message</summary>
+            {%- else -%}
+            <p>
             {%- endif %}
                 <pre><code>{{ error }}</code></pre>
             {% if n_lines > 5 -%}
             </details>
-            {%- endif %}
+            {%- else -%}
             </p>
+            {%- endif %}
         </div>
 
         {% if status_code >= 500 and status_code < 600 -%}
@@ -63,9 +65,9 @@ E.g.: Which path did you visit (`/`, `/next`, `/random`, etc.)? Which site did y
 
 ```
 " ~ error ~ "
-```" -%}
-                <a href="{{ cargo_pkg_repository }}/issues/new?labels=bug&title={{ title | urlencode_strict }}&body={{ body | urlencode_strict }}">
-                    opening an issue on GitHub</a>.
+```" %}
+                <a href="{{ cargo_pkg_repository }}/issues/new?labels=bug&title={{ title | urlencode_strict }}&body={{ body | urlencode_strict }}"
+                    >opening an issue on GitHub</a>.
             </p>
         </div>
         {%- endif %}
