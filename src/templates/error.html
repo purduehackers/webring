@@ -56,6 +56,12 @@
                 We might not realize there's a problem.<br>
                 Please let us know by
                 {%- set title = "Bug report: " ~ status_code ~ " " ~ status_text -%}
+                {%- set error_bytes = error | urlencode_strict | length -%}
+                {%- if error_bytes > 4096 -%}
+                {%- set issue_code = 'Copy and paste the error message from the "Reason" section of the error page here' -%}
+                {%- else -%}
+                {%- set issue_code = error -%}
+                {%- endif -%}
                 {%- set body = "# Description
 
 Describe what you did that resulted in this error.
@@ -64,9 +70,11 @@ E.g.: Which path did you visit (`/`, `/next`, `/random`, etc.)? Which site did y
 # Error
 
 ```
-" ~ error ~ "
+" ~ issue_code ~ "
 ```" %}
-                <a href="{{ cargo_pkg_repository }}/issues/new?labels=bug,auto%20generated&title={{ title | urlencode_strict }}&body={{ body | urlencode_strict }}"
+                <a
+                    target="_blank"
+                    href="{{ cargo_pkg_repository }}/issues/new?labels=bug,auto%20generated&title={{ title | urlencode_strict }}&body={{ body | urlencode_strict }}"
                     >opening an issue on GitHub</a>.
             </p>
         </div>
