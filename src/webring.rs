@@ -9,7 +9,7 @@ use std::{
 
 use axum::http::{Uri, uri::Authority};
 use eyre::eyre;
-use futures::{StreamExt, stream::FuturesUnordered};
+use futures::{StreamExt, future::join, stream::FuturesUnordered};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rand::seq::SliceRandom;
 
@@ -19,6 +19,7 @@ use thiserror::Error;
 use crate::{
     checking::check,
     homepage::{Homepage, MemberForHomepage},
+    stats::Stats,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,22 +76,25 @@ pub struct Webring {
     static_dir_path: PathBuf,
     file_watcher: OnceLock<RecommendedWatcher>,
     base_address: Uri,
+    stats: Stats,
 }
 
 impl Webring {
     /// Create a webring by parsing the file at the given path.
     pub async fn new(
         members_file: PathBuf,
+        stats_file: PathBuf,
         static_dir: PathBuf,
         base_address: Uri,
     ) -> eyre::Result<Webring> {
-        let webring_data = parse_file(&members_file).await?;
+        let (webring_data, stats) = join(parse_file(&members_file), Stats::new(stats_file)).await;
 
         let webring = Webring {
-            inner: RwLock::new(webring_data),
+            inner: RwLock::new(webring_data?),
             members_file_path: members_file,
             static_dir_path: static_dir,
             homepage: tokio::sync::RwLock::new(None),
+            stats: stats?,
             file_watcher: OnceLock::default(),
             base_address,
         };
@@ -525,10 +529,12 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         )
         .await
         .unwrap();
+        let stats_file = NamedTempFile::new().unwrap();
         let static_dir = TempDir::new().unwrap();
 
         let webring = Webring::new(
             members_file.path().to_owned(),
+            stats_file.path().to_owned(),
             static_dir.path().to_owned(),
             Uri::from_static("https://ring.purduehackers.com"),
         )
@@ -722,7 +728,7 @@ kian — kasad.com — 456 — NonE
     ///
     /// The [`TempDir`] isn't terribly useful, but once it is dropped, the files are cleaned up, so
     /// it must be returned.
-    async fn create_files() -> (TempDir, PathBuf, PathBuf) {
+    async fn create_files() -> (TempDir, PathBuf, PathBuf, PathBuf) {
         let dir = TempDir::new().unwrap();
         let static_dir_path = dir.path().join("static");
         tokio::fs::create_dir(&static_dir_path).await.unwrap();
@@ -733,12 +739,13 @@ kian — kasad.com — 456 — NonE
         tokio::fs::File::create_new(&members_file_path)
             .await
             .unwrap();
-        (dir, members_file_path, static_dir_path)
+        let stats_file = dir.path().join("stats.parquet");
+        (dir, members_file_path, stats_file, static_dir_path)
     }
 
     #[tokio::test]
     async fn test_reload_webring() {
-        let (_dir, members_file, static_dir) = create_files().await;
+        let (_dir, members_file, stats_file, static_dir) = create_files().await;
         let file_contents = "\
 cynthia — https://clementine.viridian.page — 789 — nONE";
         tokio::fs::write(&members_file, file_contents)
@@ -747,6 +754,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE";
         let webring = Arc::new(
             Webring::new(
                 members_file.clone(),
+                stats_file,
                 static_dir,
                 Uri::from_static("https://ring.purduehackers.com"),
             )
@@ -768,7 +776,7 @@ kian — kasad.com — 123 — none";
 
     #[tokio::test]
     async fn test_reload_homepage() {
-        let (_dir, members_file, static_dir) = create_files().await;
+        let (_dir, members_file, _, static_dir) = create_files().await;
         let webring = Arc::new(Webring {
             static_dir_path: static_dir.clone(),
             members_file_path: members_file,
@@ -795,7 +803,7 @@ kian — kasad.com — 123 — none";
     /// does actually get dropped.
     #[tokio::test]
     async fn test_reload_gets_dropped() {
-        let (_dir, members_file, static_dir) = create_files().await;
+        let (_dir, members_file, _, static_dir) = create_files().await;
         let webring = Arc::new(Webring {
             members_file_path: members_file,
             static_dir_path: static_dir,
