@@ -6,6 +6,7 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     process::ExitCode,
+    sync::Arc,
 };
 
 use clap::{Parser, ValueEnum};
@@ -112,12 +113,7 @@ async fn main() -> ExitCode {
     }
 
     // Create webring data structure
-    let webring = match Webring::new(
-        cli.members_file.clone(),
-        cli.static_dir.clone(),
-    )
-    .await
-    {
+    let webring = match Webring::new(cli.members_file.clone(), cli.static_dir.clone()).await {
         Ok(w) => w,
         Err(err) => {
             error!("Failed to create webring: {err}");
@@ -126,7 +122,7 @@ async fn main() -> ExitCode {
     };
 
     // Start server
-    let router = create_router(&cli).with_state(webring);
+    let router = create_router(&cli).with_state(Arc::new(webring));
     let bind_addr = &cli.listen_addr;
     match tokio::net::TcpListener::bind(bind_addr).await {
         // Unwrapping this is fine because it will never resolve

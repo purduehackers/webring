@@ -1,7 +1,11 @@
 //! Routes and endpoints
 
 use std::{
-    collections::HashMap, error::Error, fmt::Display, fmt::Write, str::FromStr, sync::LazyLock,
+    collections::HashMap,
+    error::Error,
+    fmt::{Display, Write},
+    str::FromStr,
+    sync::{Arc, LazyLock},
 };
 
 use axum::{
@@ -30,7 +34,7 @@ use crate::{
 static ERROR_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_error_template);
 
 /// Creates a [`Router`] with the routes for our application.
-pub fn create_router(cli: &CliOptions) -> Router<&'static Webring> {
+pub fn create_router(cli: &CliOptions) -> Router<Arc<Webring>> {
     let mut router = Router::new()
         .nest_service(
             "/static",
@@ -81,7 +85,7 @@ fn create_error_template() -> Tera {
     tera
 }
 
-async fn serve_index(State(webring): State<&Webring>) -> Result<Response, RouteError> {
+async fn serve_index(State(webring): State<Arc<Webring>>) -> Result<Response, RouteError> {
     Ok(Html(webring.homepage().await?.to_html().to_owned()).into_response())
 }
 
@@ -94,12 +98,12 @@ async fn serve_index(State(webring): State<&Webring>) -> Result<Response, RouteE
 ///
 /// If finding the next site fails, an HTTP 502 (Service Unavailable) response is sent.
 async fn serve_next(
-    State(webring): State<&Webring>,
+    State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Redirect, RouteError> {
     let origin = get_origin_from_request(headers, params)?;
-    let page = webring.next_page(&origin)?;
+    let page = webring.next_page(&origin).await?;
     Ok(Redirect::to(page.to_string().as_str()))
 }
 
@@ -112,12 +116,12 @@ async fn serve_next(
 ///
 /// If finding the previous site fails, an HTTP 502 (Service Unavailable) response is sent.
 async fn serve_previous(
-    State(webring): State<&Webring>,
+    State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Redirect, RouteError> {
     let origin = get_origin_from_request(headers, params)?;
-    let page = webring.prev_page(&origin)?;
+    let page = webring.prev_page(&origin).await?;
     Ok(Redirect::to(page.to_string().as_str()))
 }
 
@@ -130,12 +134,12 @@ async fn serve_previous(
 ///
 /// If finding a random site fails, an HTTP 502 (Service Unavailable) response is sent.
 async fn serve_random(
-    State(webring): State<&Webring>,
+    State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Redirect, RouteError> {
     let maybe_origin = get_origin_from_request(headers, params).ok();
-    let page = webring.random_page(maybe_origin.as_ref())?;
+    let page = webring.random_page(maybe_origin.as_ref()).await?;
     Ok(Redirect::to(page.to_string().as_str()))
 }
 
