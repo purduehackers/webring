@@ -33,6 +33,7 @@ pub enum CheckLevel {
 struct Member {
     name: String,
     website: Arc<Uri>,
+    #[allow(dead_code)] // FIXME: Remove once Discord integration is implemented
     discord_id: String,
     check_level: CheckLevel,
     check_successful: Arc<AtomicBool>,
@@ -410,7 +411,6 @@ pub enum TraverseWebringError {
 mod tests {
     use std::{
         collections::{HashMap, HashSet},
-        io::Write,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
