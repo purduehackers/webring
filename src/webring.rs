@@ -5,16 +5,17 @@ use std::{
         Arc, RwLock, RwLockReadGuard,
         atomic::{AtomicBool, Ordering},
     },
+    time::SystemTime,
 };
 
 use axum::http::{Uri, uri::Authority};
 use eyre::eyre;
-use futures::{StreamExt, future::join, stream::FuturesUnordered};
+use futures::{StreamExt, stream::FuturesUnordered};
 use rand::seq::SliceRandom;
 
-use log::warn;
-use serde::Serialize;
+use log::{error, warn};
 use thiserror::Error;
+use tokio::io::AsyncReadExt;
 
 use crate::{
     checking::check,
@@ -57,6 +58,7 @@ impl Member {
 struct WebringData {
     members_table: HashMap<Authority, usize>,
     ordering: Vec<Member>,
+    source_file_last_modified: SystemTime,
 }
 
 /// The data structure underlying a webring. Implements the core webring functionality.
@@ -73,33 +75,45 @@ pub struct Webring {
 
 impl Webring {
     /// Create a webring by parsing the file at the given path.
-    ///
-    /// Leaks the webring object to make a singleton value.
-    ///
-    /// Panics if called twice in the lifetime of the process.
-    pub async fn new(
-        members_file: PathBuf,
-        static_dir: PathBuf,
-    ) -> eyre::Result<&'static Webring> {
-        static CALLED_NEW_ALREADY: AtomicBool = AtomicBool::new(false);
-
-        assert!(
-            !CALLED_NEW_ALREADY.swap(true, Ordering::Relaxed),
-            "Cannot call Webring::new() twice in the lifetime of the program."
-        );
-
+    pub async fn new(members_file: PathBuf, static_dir: PathBuf) -> eyre::Result<Webring> {
         let webring_data = parse_file(&members_file).await;
 
-        let webring = &*Box::leak::<'static>(Box::new(Webring {
+        let webring = Webring {
             inner: RwLock::new(webring_data?),
             members_file_path: members_file,
             static_dir_path: static_dir,
             homepage: tokio::sync::RwLock::new(None),
-        }));
+        };
 
         webring.check_members().await?;
 
         Ok(webring)
+    }
+
+    /// Re-load the [`Webring`] from its source file if the source file has been modified since the
+    /// last time we loaded it.
+    ///
+    /// Any errors returned by [`update_from_file()`] as part of this operation are logged and then
+    /// ignored.
+    pub async fn try_update(&self) {
+        let last_modified = self.inner.read().unwrap().source_file_last_modified;
+        let source_file = &self.members_file_path;
+        let metadata = match tokio::fs::metadata(source_file).await {
+            Ok(m) => m,
+            Err(err) => {
+                error!("Error getting member file metadata: {err}");
+                return;
+            }
+        };
+        if metadata
+            .modified()
+            .expect("System does not support modification timestamps")
+            > last_modified
+        {
+            if let Err(err) = self.update_from_file().await {
+                error!("Members list modified but failed to reload: {err}");
+            }
+        }
     }
 
     /// Update the webring in-place by re-parsing the file given in the original `new` call, and invalidating the cache of the SSR'ed homepage.
@@ -172,7 +186,8 @@ impl Webring {
     }
 
     /// Get the next page in the webring from the given URI based on the authority part
-    pub fn next_page(&self, uri: &Uri) -> Result<Arc<Uri>, TraverseWebringError> {
+    pub async fn next_page(&self, uri: &Uri) -> Result<Arc<Uri>, TraverseWebringError> {
+        self.try_update().await;
         let (mut idx, inner) = self.member_idx_and_lock(uri)?;
 
         // -1 to avoid jumping all the way around the ring to the same page
@@ -193,7 +208,8 @@ impl Webring {
     }
 
     /// Get the previous page in the webring from the given URI; based on the authority part
-    pub fn prev_page(&self, uri: &Uri) -> Result<Arc<Uri>, TraverseWebringError> {
+    pub async fn prev_page(&self, uri: &Uri) -> Result<Arc<Uri>, TraverseWebringError> {
+        self.try_update().await;
         let (mut idx, inner) = self.member_idx_and_lock(uri)?;
 
         // -1 to avoid jumping all the way around the ring to the same page
@@ -218,10 +234,11 @@ impl Webring {
     /// If the `origin` has a value, the returned page will be different from the one referred to
     /// by the value. This prevents a user who has a `/random` link on their site from being sent
     /// back to the site they came from.
-    pub fn random_page(
+    pub async fn random_page(
         &self,
         maybe_origin: Option<&Uri>,
     ) -> Result<Arc<Uri>, TraverseWebringError> {
+        self.try_update().await;
         let (maybe_idx, inner) =
             match maybe_origin.and_then(|origin| self.member_idx_and_lock(origin).ok()) {
                 Some((idx, inner)) => (Some(idx), inner),
@@ -314,14 +331,21 @@ async fn collect_errs(
 }
 
 async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
-    let file = tokio::fs::read_to_string(&path).await?;
+    let mut file = tokio::fs::File::open(&path).await?;
+    let mut file_contents = String::new();
+    file.read_to_string(&mut file_contents).await?;
 
     let mut members = WebringData {
         members_table: HashMap::new(),
         ordering: Vec::new(),
+        source_file_last_modified: file
+            .metadata()
+            .await?
+            .modified()
+            .expect("System does not support file modification timestamp"),
     };
 
-    for line in file.lines().filter(|line| !line.is_empty()) {
+    for line in file_contents.lines().filter(|line| !line.is_empty()) {
         let split = line.split("—").map(str::trim).collect::<Vec<_>>();
 
         if split.len() != 4 {
@@ -386,6 +410,7 @@ pub enum TraverseWebringError {
 mod tests {
     use std::{
         collections::{HashMap, HashSet},
+        io::Write,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -411,52 +436,48 @@ mod tests {
     }
 
     impl Webring {
-        fn assert_prev(
+        async fn assert_prev(
             &self,
             addr: &'static str,
             prev: Result<&'static str, TraverseWebringError>,
         ) {
             assert_eq!(
-                self.prev_page(&Uri::from_static(addr)),
+                self.prev_page(&Uri::from_static(addr)).await,
                 prev.map(|v| Arc::new(Uri::from_static(v)))
             );
         }
 
-        fn assert_next(
+        async fn assert_next(
             &self,
             addr: &'static str,
             next: Result<&'static str, TraverseWebringError>,
         ) {
             assert_eq!(
-                self.next_page(&Uri::from_static(addr)),
+                self.next_page(&Uri::from_static(addr)).await,
                 next.map(|v| Arc::new(Uri::from_static(v)))
             );
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    #[tokio::test]
-    async fn test_webring() {
-        let members_file = NamedTempFile::new().unwrap();
-        tokio::fs::write(
-            members_file.path(),
-            "
+    const MEMBERS_FILE_TEXT: &str = "
 henry — hrovnyak.gitlab.io — 123 — None
 kian — kasad.com — 456 — NonE
 cynthia — https://clementine.viridian.page — 789 — nONE
 ??? — ws://refuse-the-r.ing — bruh — none
-",
-        )
-        .await
-        .unwrap();
+";
+
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn test_webring() {
+        let members_file = NamedTempFile::new().unwrap();
+        tokio::fs::write(members_file.path(), MEMBERS_FILE_TEXT)
+            .await
+            .unwrap();
         let static_dir = TempDir::new().unwrap();
 
-        let webring = Webring::new(
-            members_file.path().to_owned(),
-            static_dir.path().to_owned(),
-        )
-        .await
-        .unwrap();
+        let webring = Webring::new(members_file.path().to_owned(), static_dir.path().to_owned())
+            .await
+            .unwrap();
 
         {
             let inner = webring.inner.read().unwrap();
@@ -502,54 +523,74 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             assert_eq!(inner.ordering, expected_ordering);
         }
 
-        webring.assert_next(
-            "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
-            Ok("kasad.com"),
-        );
+        webring
+            .assert_next(
+                "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
+                Ok("kasad.com"),
+            )
+            .await;
 
-        webring.assert_prev(
-            "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
-            Ok("ws://refuse-the-r.ing"),
-        );
+        webring
+            .assert_prev(
+                "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
+                Ok("ws://refuse-the-r.ing"),
+            )
+            .await;
 
-        webring.assert_next("huh://refuse-the-r.ing", Ok("hrovnyak.gitlab.io"));
-        webring.assert_prev(
-            "https://kasad.com:3000",
-            Err(TraverseWebringError::AuthorityNotFound(
-                Authority::from_static("kasad.com:3000"),
-            )),
-        );
-        webring.assert_next("https://kasad.com", Ok("https://clementine.viridian.page"));
-        webring.assert_prev(
-            "/relative/uri",
-            Err(TraverseWebringError::NoAuthority(Uri::from_static(
+        webring
+            .assert_next("huh://refuse-the-r.ing", Ok("hrovnyak.gitlab.io"))
+            .await;
+        webring
+            .assert_prev(
+                "https://kasad.com:3000",
+                Err(TraverseWebringError::AuthorityNotFound(
+                    Authority::from_static("kasad.com:3000"),
+                )),
+            )
+            .await;
+        webring
+            .assert_next("https://kasad.com", Ok("https://clementine.viridian.page"))
+            .await;
+        webring
+            .assert_prev(
                 "/relative/uri",
-            ))),
-        );
+                Err(TraverseWebringError::NoAuthority(Uri::from_static(
+                    "/relative/uri",
+                ))),
+            )
+            .await;
 
         webring.inner.write().unwrap().ordering[0]
             .check_successful
             .store(false, Ordering::Relaxed);
 
-        webring.assert_next(
-            "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
-            Ok("kasad.com"),
-        );
+        webring
+            .assert_next(
+                "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
+                Ok("kasad.com"),
+            )
+            .await;
 
-        webring.assert_prev(
-            "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
-            Ok("ws://refuse-the-r.ing"),
-        );
+        webring
+            .assert_prev(
+                "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
+                Ok("ws://refuse-the-r.ing"),
+            )
+            .await;
 
-        webring.assert_next("refuse-the-r.ing", Ok("kasad.com"));
-        webring.assert_prev("kasad.com", Ok("ws://refuse-the-r.ing"));
+        webring
+            .assert_next("refuse-the-r.ing", Ok("kasad.com"))
+            .await;
+        webring
+            .assert_prev("kasad.com", Ok("ws://refuse-the-r.ing"))
+            .await;
 
         let mut found_in_random = HashSet::new();
 
         // Test random with a specified origin matching a site
         let origin = Uri::from_static("ws://refuse-the-r.ing");
         for _ in 0..200 {
-            found_in_random.insert((*webring.random_page(Some(&origin)).unwrap()).clone());
+            found_in_random.insert((*webring.random_page(Some(&origin)).await.unwrap()).clone());
         }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
@@ -559,7 +600,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         // Test random without a specified origin
         found_in_random.clear();
         for _ in 0..200 {
-            found_in_random.insert((*webring.random_page(None).unwrap()).clone());
+            found_in_random.insert((*webring.random_page(None).await.unwrap()).clone());
         }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
@@ -571,7 +612,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         let origin = Uri::from_static("https://ring.purduehackers.com");
         found_in_random.clear();
         for _ in 0..200 {
-            found_in_random.insert((*webring.random_page(Some(&origin)).unwrap()).clone());
+            found_in_random.insert((*webring.random_page(Some(&origin)).await.unwrap()).clone());
         }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
@@ -594,11 +635,19 @@ kian — kasad.com — 456 — NonE
 
         webring.update_from_file().await.unwrap();
 
-        webring.assert_next("clementine.viridian.page", Ok("http://refuse-the-r.ing"));
-        webring.assert_next("hrovnyak.gitlab.io", Ok("http://refuse-the-r.ing"));
-        webring.assert_next("refuse-the-r.ing", Ok("arhan.sh"));
-        webring.assert_next("arhan.sh", Ok("kasad.com"));
-        webring.assert_next("kasad.com", Ok("https://clementine.viridian.page"));
+        webring
+            .assert_next("clementine.viridian.page", Ok("http://refuse-the-r.ing"))
+            .await;
+        webring
+            .assert_next("hrovnyak.gitlab.io", Ok("http://refuse-the-r.ing"))
+            .await;
+        webring
+            .assert_next("refuse-the-r.ing", Ok("arhan.sh"))
+            .await;
+        webring.assert_next("arhan.sh", Ok("kasad.com")).await;
+        webring
+            .assert_next("kasad.com", Ok("https://clementine.viridian.page"))
+            .await;
 
         for i in 0..5 {
             webring.inner.write().unwrap().ordering[i]
@@ -606,19 +655,25 @@ kian — kasad.com — 456 — NonE
                 .store(false, Ordering::Relaxed);
         }
 
-        webring.assert_next("kasad.com", Err(TraverseWebringError::AllMembersFailing));
-        webring.assert_prev(
-            "clementine.viridian.page",
-            Err(TraverseWebringError::AllMembersFailing),
-        );
+        webring
+            .assert_next("kasad.com", Err(TraverseWebringError::AllMembersFailing))
+            .await;
+        webring
+            .assert_prev(
+                "clementine.viridian.page",
+                Err(TraverseWebringError::AllMembersFailing),
+            )
+            .await;
         assert_eq!(
-            webring.random_page(None),
+            webring.random_page(None).await,
             Err(TraverseWebringError::AllMembersFailing)
         );
-        webring.assert_prev(
-            "clementine.viridian.page",
-            Err(TraverseWebringError::AllMembersFailing),
-        );
+        webring
+            .assert_prev(
+                "clementine.viridian.page",
+                Err(TraverseWebringError::AllMembersFailing),
+            )
+            .await;
 
         webring.inner.write().unwrap().ordering[3]
             .check_successful
@@ -626,15 +681,97 @@ kian — kasad.com — 456 — NonE
 
         for _ in 0..200 {
             assert_eq!(
-                webring.random_page(None),
+                webring.random_page(None).await,
                 Ok(Arc::new(Uri::from_static("arhan.sh")))
             );
         }
 
-        webring.assert_prev("arhan.sh", Err(TraverseWebringError::AllMembersFailing));
-        webring.assert_next("arhan.sh", Err(TraverseWebringError::AllMembersFailing));
+        webring
+            .assert_prev("arhan.sh", Err(TraverseWebringError::AllMembersFailing))
+            .await;
+        webring
+            .assert_next("arhan.sh", Err(TraverseWebringError::AllMembersFailing))
+            .await;
 
-        webring.assert_prev("refuse-the-r.ing", Ok("arhan.sh"));
-        webring.assert_next("kasad.com", Ok("arhan.sh"));
+        webring
+            .assert_prev("refuse-the-r.ing", Ok("arhan.sh"))
+            .await;
+        webring.assert_next("kasad.com", Ok("arhan.sh")).await;
+    }
+
+    #[tokio::test]
+    async fn test_reload() {
+        // Create a members file containing all but the last line in the original MEMBERS_FILE_TEXT
+        let members_lines: Vec<&str> = MEMBERS_FILE_TEXT.lines().collect();
+        let truncated_members_text = {
+            let mut s = members_lines[..members_lines.len() - 1].join("\n");
+            s.push('\n');
+            s
+        };
+        let members_file = NamedTempFile::new().unwrap();
+        tokio::fs::write(members_file.path(), truncated_members_text)
+            .await
+            .unwrap();
+
+        // Create a webring from this file
+        let static_dir = TempDir::new().unwrap();
+        let webring = Webring::new(members_file.path().to_owned(), static_dir.path().to_owned())
+            .await
+            .unwrap();
+
+        // Check initial expected members
+        let mut expected_table = HashMap::new();
+        expected_table.insert(Authority::from_static("hrovnyak.gitlab.io"), 0);
+        expected_table.insert(Authority::from_static("kasad.com"), 1);
+        expected_table.insert(Authority::from_static("clementine.viridian.page"), 2);
+        assert_eq!(webring.inner.read().unwrap().members_table, expected_table);
+
+        // Check initial expected members
+        let mut expected_ordering = vec![
+            Member {
+                name: "henry".to_owned(),
+                website: Arc::new(Uri::from_static("hrovnyak.gitlab.io")),
+                discord_id: "123".to_owned(),
+                check_level: CheckLevel::None,
+                check_successful: Arc::new(AtomicBool::new(true)),
+            },
+            Member {
+                name: "kian".to_owned(),
+                website: Arc::new(Uri::from_static("kasad.com")),
+                discord_id: "456".to_owned(),
+                check_level: CheckLevel::None,
+                check_successful: Arc::new(AtomicBool::new(true)),
+            },
+            Member {
+                name: "cynthia".to_owned(),
+                website: Arc::new(Uri::from_static("https://clementine.viridian.page")),
+                discord_id: "789".to_owned(),
+                check_level: CheckLevel::None,
+                check_successful: Arc::new(AtomicBool::new(true)),
+            },
+        ];
+        assert_eq!(webring.inner.read().unwrap().ordering, expected_ordering);
+
+        // Append last member to webring file
+        tokio::fs::write(members_file.path(), MEMBERS_FILE_TEXT)
+            .await
+            .unwrap();
+
+        // Attempt to update
+        webring.try_update().await;
+
+        // Add last user to expectations
+        expected_table.insert(Authority::from_static("refuse-the-r.ing"), 3);
+        expected_ordering.push(Member {
+            name: "???".to_owned(),
+            website: Arc::new(Uri::from_static("ws://refuse-the-r.ing")),
+            discord_id: "bruh".to_owned(),
+            check_level: CheckLevel::None,
+            check_successful: Arc::new(AtomicBool::new(true)),
+        });
+
+        // Check that new data matches
+        assert_eq!(webring.inner.read().unwrap().members_table, expected_table);
+        assert_eq!(webring.inner.read().unwrap().members_table, expected_table);
     }
 }
