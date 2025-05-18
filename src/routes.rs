@@ -13,12 +13,11 @@ use axum::{
     body::Body,
     extract::{Query, Request, State},
     handler::HandlerWithoutStateExt,
-    http::{HeaderMap, Uri, uri::InvalidUri},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, uri::InvalidUri},
     response::{Html, IntoResponse, NoContent, Redirect, Response},
     routing::get,
 };
 use log::warn;
-use reqwest::StatusCode;
 use tera::Tera;
 use tower_http::{
     catch_panic::{CatchPanicLayer, ResponseForPanic},
@@ -101,10 +100,18 @@ async fn serve_next(
     State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<Redirect, RouteError> {
+) -> Result<Response, RouteError> {
     let origin = get_origin_from_request(headers, params)?;
     let page = webring.next_page(&origin)?;
-    Ok(Redirect::to(page.to_string().as_str()))
+    Ok((
+        // Set Vary: Referer so browsers will not cache responses for requests with different origins
+        [(
+            HeaderName::from_static("vary"),
+            HeaderValue::from_static("Referer"),
+        )],
+        Redirect::to(page.to_string().as_str()),
+    )
+        .into_response())
 }
 
 /// Serve the `/previous` and `/prev` endpoints.
@@ -119,10 +126,18 @@ async fn serve_previous(
     State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<Redirect, RouteError> {
+) -> Result<Response, RouteError> {
     let origin = get_origin_from_request(headers, params)?;
     let page = webring.prev_page(&origin)?;
-    Ok(Redirect::to(page.to_string().as_str()))
+    Ok((
+        // Set Vary: Referer so browsers will not cache responses for requests with different origins
+        [(
+            HeaderName::from_static("vary"),
+            HeaderValue::from_static("Referer"),
+        )],
+        Redirect::to(page.to_string().as_str()),
+    )
+        .into_response())
 }
 
 /// Serve the `/random` endpoint.
@@ -137,10 +152,18 @@ async fn serve_random(
     State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<Redirect, RouteError> {
+) -> Result<Response, RouteError> {
     let maybe_origin = get_origin_from_request(headers, params).ok();
     let page = webring.random_page(maybe_origin.as_ref())?;
-    Ok(Redirect::to(page.to_string().as_str()))
+    Ok((
+        // Don't cache since this response can change for every request
+        [(
+            HeaderName::from_static("cache-control"),
+            HeaderValue::from_static("no-cache, no-store"),
+        )],
+        Redirect::to(page.to_string().as_str()),
+    )
+        .into_response())
 }
 
 /// Get a URI representing the origin of the request.
