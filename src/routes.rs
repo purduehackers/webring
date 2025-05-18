@@ -7,11 +7,13 @@ use std::{
 use axum::{
     Router,
     body::Body,
-    extract::{Query, State},
+    extract::{Query, Request, State},
+    handler::HandlerWithoutStateExt,
     http::{HeaderMap, Uri, uri::InvalidUri},
     response::{Html, IntoResponse, NoContent, Redirect, Response},
     routing::get,
 };
+use log::warn;
 use reqwest::StatusCode;
 use tera::Tera;
 use tower_http::{
@@ -30,7 +32,14 @@ static ERROR_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_error_template);
 /// Creates a [`Router`] with the routes for our application.
 pub fn create_router(cli: &CliOptions) -> Router<&'static Webring> {
     let mut router = Router::new()
-        .nest_service("/static", ServeDir::new(&cli.static_dir))
+        .nest_service(
+            "/static",
+            ServeDir::new(&cli.static_dir).fallback(HandlerWithoutStateExt::into_service(
+                async |request: Request| -> RouteError {
+                    RouteError::FileNotFound(format!("/static{}", request.uri()))
+                },
+            )),
+        )
         .route(
             "/healthcheck",
             get(async || NoContent).layer(CorsLayer::new().allow_origin(Any)),
@@ -40,7 +49,12 @@ pub fn create_router(cli: &CliOptions) -> Router<&'static Webring> {
         // Support /prev and /previous as aliases of each other
         .route("/prev", get(serve_previous))
         .route("/previous", get(serve_previous))
-        .route("/random", get(serve_random));
+        .route("/random", get(serve_random))
+        .fallback_service(HandlerWithoutStateExt::into_service(
+            async |request: Request| -> RouteError {
+                RouteError::NoRoute(request.uri().to_owned())
+            },
+        ));
 
     // Add debugging routes
     if cfg!(debug_assertions) {
@@ -179,7 +193,7 @@ impl Display for OriginUriLocation {
 
 #[derive(Debug, thiserror::Error)]
 enum RouteError {
-    #[error(r#"Origin URI "{uri}" found in {place} is invalid: {reason}"#)]
+    #[error(r#"Origin URI "{uri}" found in {place} is invalid: {reason}."#)]
     InvalidOriginURI {
         uri: String,
         #[source]
@@ -190,7 +204,7 @@ enum RouteError {
     #[error("Request doesn't indicate which site it originates from.")]
     MissingOriginURI,
 
-    #[error("{0} contains data which is not valid UTF-8")]
+    #[error("{0} contains data which is not valid UTF-8.")]
     HeaderToStr(OriginUriLocation),
 
     #[error("Error traversing webring: {0}")]
@@ -200,12 +214,18 @@ enum RouteError {
         TraverseWebringError,
     ),
 
-    #[error("Error rendering homepage: {0}")]
+    #[error("Error rendering homepage: {0}.")]
     RenderHomepage(
         #[from]
         #[source]
         eyre::Report,
     ),
+
+    #[error("No handler for path {0}")]
+    NoRoute(Uri),
+
+    #[error("File {0} does not exist")]
+    FileNotFound(String),
 }
 
 impl IntoResponse for RouteError {
@@ -221,6 +241,7 @@ impl IntoResponse for RouteError {
             | RouteError::MissingOriginURI
             | RouteError::HeaderToStr(_) => StatusCode::BAD_REQUEST,
             RouteError::RenderHomepage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            RouteError::NoRoute(_) | RouteError::FileNotFound(_) => StatusCode::NOT_FOUND,
         };
         let mut context = tera::Context::new();
         context.insert("status_code", &status.as_u16());
@@ -234,7 +255,15 @@ impl IntoResponse for RouteError {
                 StatusCode::BAD_REQUEST => "The request we received wasn't quite right.",
                 StatusCode::SERVICE_UNAVAILABLE => "We couldn't find a site to route you to.",
                 StatusCode::INTERNAL_SERVER_ERROR => "Something unexpected went wrong.",
-                _ => "We're not quite sure.",
+                StatusCode::NOT_FOUND => "The page you requested doesn't exist.",
+                other => {
+                    warn!(
+                        "Error code without registered message was returned: {} ({})",
+                        other.as_u16(),
+                        other.canonical_reason().unwrap_or("")
+                    );
+                    "We're not quite sure."
+                }
             },
         );
         context.insert("cargo_pkg_repository", env!("CARGO_PKG_REPOSITORY"));
