@@ -52,7 +52,7 @@ async fn serve_next(
 ) -> Result<Redirect, Response> {
     let origin = get_origin_from_request(&headers, &params)?;
     // FIXME: Differentiate between origin not found and all sites failing checks
-    match webring.next_page(&origin) {
+    match webring.next_page(&origin).ok() {
         Some(page) => Ok(Redirect::to(page.to_string().as_str())),
         None => Err((StatusCode::SERVICE_UNAVAILABLE, "No suitable sites found").into_response()),
     }
@@ -73,7 +73,7 @@ async fn serve_previous(
 ) -> Result<Redirect, Response> {
     let origin = get_origin_from_request(&headers, &params)?;
     // FIXME: Differentiate between origin not found and all sites failing checks
-    match webring.prev_page(&origin) {
+    match webring.prev_page(&origin).ok() {
         Some(page) => Ok(Redirect::to(page.to_string().as_str())),
         None => Err((StatusCode::SERVICE_UNAVAILABLE, "No suitable sites found").into_response()),
     }

@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{
-        Arc, RwLock,
+        Arc, RwLock, RwLockReadGuard,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -13,6 +13,7 @@ use futures::{StreamExt, future::join, stream::FuturesUnordered};
 use rand::seq::SliceRandom;
 
 use log::warn;
+use thiserror::Error;
 
 use crate::{checking::check, render_homepage::Homepage, stats::Stats};
 
@@ -146,50 +147,63 @@ impl Webring {
         ret
     }
 
-    /// Get the next page in the webring from the given URI based on the authority part
-    ///
-    /// Returns None if the URI has no authority (is relative), the authority was not found in the webring, or all of the webring members failed the check.
-    pub fn next_page(&self, uri: &Uri) -> Option<Arc<Uri>> {
+    fn member_idx_and_lock(
+        &self,
+        uri: &Uri,
+    ) -> Result<(usize, RwLockReadGuard<'_, WebringData>), TraverseWebringError> {
         let inner = self.inner.read().unwrap();
-        let mut idx = *inner.members_table.get(uri.authority()?)?;
+        let authority = uri
+            .authority()
+            .ok_or_else(|| TraverseWebringError::NoAuthority(uri.to_owned()))?;
+        Ok((
+            *inner
+                .members_table
+                .get(authority)
+                .ok_or_else(|| TraverseWebringError::AuthorityNotFound(authority.to_owned()))?,
+            inner,
+        ))
+    }
 
-        for _ in 0..inner.ordering.len() {
+    /// Get the next page in the webring from the given URI based on the authority part
+    pub fn next_page(&self, uri: &Uri) -> Result<Arc<Uri>, TraverseWebringError> {
+        let (mut idx, inner) = self.member_idx_and_lock(uri)?;
+
+        // -1 to avoid jumping all the way around the ring to the same page
+        for _ in 0..inner.ordering.len() - 1 {
             idx += 1;
             if idx == inner.ordering.len() {
                 idx = 0;
             }
 
             if inner.ordering[idx].check_successful.load(Ordering::Relaxed) {
-                return Some(Arc::clone(&inner.ordering[idx].website));
+                return Ok(Arc::clone(&inner.ordering[idx].website));
             }
         }
 
         warn!("All webring members are broken???");
 
-        None
+        Err(TraverseWebringError::AllMembersFailing)
     }
 
     /// Get the previous page in the webring from the given URI; based on the authority part
-    ///
-    /// Returns None if the URI has no authority (is relative), the authority was not found in the webring, or all of the webring members failed the check.
-    pub fn prev_page(&self, uri: &Uri) -> Option<Arc<Uri>> {
-        let inner = self.inner.read().unwrap();
-        let mut idx = *inner.members_table.get(uri.authority()?)?;
+    pub fn prev_page(&self, uri: &Uri) -> Result<Arc<Uri>, TraverseWebringError> {
+        let (mut idx, inner) = self.member_idx_and_lock(uri)?;
 
-        for _ in 0..inner.ordering.len() {
+        // -1 to avoid jumping all the way around the ring to the same page
+        for _ in 0..inner.ordering.len() - 1 {
             if idx == 0 {
                 idx = inner.ordering.len();
             }
             idx -= 1;
 
             if inner.ordering[idx].check_successful.load(Ordering::Relaxed) {
-                return Some(Arc::clone(&inner.ordering[idx].website));
+                return Ok(Arc::clone(&inner.ordering[idx].website));
             }
         }
 
         warn!("All webring members are broken???");
 
-        None
+        Err(TraverseWebringError::AllMembersFailing)
     }
 
     /// Get a random page in the webring.
@@ -199,8 +213,13 @@ impl Webring {
     /// back to the site they came from.
     ///
     /// Returns None if all of the webring members failed the check.
-    pub fn random_page(&self, origin: Option<&Uri>) -> Option<Arc<Uri>> {
-        let inner = self.inner.read().unwrap();
+    pub fn random_page(&self, maybe_origin: Option<&Uri>) -> Option<Arc<Uri>> {
+        let (maybe_idx, inner) =
+            match maybe_origin.and_then(|origin| self.member_idx_and_lock(origin).ok()) {
+                Some((idx, inner)) => (Some(idx), inner),
+                None => (None, self.inner.read().unwrap()),
+            };
+
         let mut range = (0..inner.ordering.len()).collect::<Vec<_>>();
         let mut range = &mut *range;
 
@@ -210,12 +229,10 @@ impl Webring {
             let (chosen, rest) = range.partial_shuffle(&mut rng, 1);
             let chosen = chosen[0];
 
-            if inner.ordering[chosen]
-                .check_successful
-                .load(Ordering::Relaxed)
-                && origin.is_none_or(|origin| {
-                    origin.authority() != inner.ordering[chosen].website.authority()
-                })
+            if maybe_idx != Some(chosen)
+                && inner.ordering[chosen]
+                    .check_successful
+                    .load(Ordering::Relaxed)
             {
                 return Some(Arc::clone(&inner.ordering[chosen].website));
             }
@@ -353,6 +370,19 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
     Ok(members)
 }
 
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum TraverseWebringError {
+    #[error(
+        "The URI does not have an authority component (it is relative rather than absolute): {0}"
+    )]
+    NoAuthority(Uri),
+    #[error("The authority was not found in the webring: {0}")]
+    AuthorityNotFound(Authority),
+    /// This may be returned even if the origin URI is passing because jumping to the same URI is undesirable
+    #[error("All possible members fail the webring test")]
+    AllMembersFailing,
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -368,7 +398,7 @@ mod tests {
 
     use crate::webring::{CheckLevel, Webring};
 
-    use super::Member;
+    use super::{Member, TraverseWebringError};
 
     impl PartialEq for Member {
         fn eq(&self, other: &Self) -> bool {
@@ -382,17 +412,25 @@ mod tests {
     }
 
     impl Webring {
-        fn assert_prev(&self, addr: &'static str, prev: impl Into<Option<&'static str>>) {
+        fn assert_prev(
+            &self,
+            addr: &'static str,
+            prev: Result<&'static str, TraverseWebringError>,
+        ) {
             assert_eq!(
                 self.prev_page(&Uri::from_static(addr)),
-                prev.into().map(|v| Arc::new(Uri::from_static(v)))
+                prev.map(|v| Arc::new(Uri::from_static(v)))
             );
         }
 
-        fn assert_next(&self, addr: &'static str, next: impl Into<Option<&'static str>>) {
+        fn assert_next(
+            &self,
+            addr: &'static str,
+            next: Result<&'static str, TraverseWebringError>,
+        ) {
             assert_eq!(
                 self.next_page(&Uri::from_static(addr)),
-                next.into().map(|v| Arc::new(Uri::from_static(v)))
+                next.map(|v| Arc::new(Uri::from_static(v)))
             );
         }
     }
@@ -464,17 +502,28 @@ cynthia — https://clementine.viridian.page — 789 — nONE
 
         webring.assert_next(
             "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
-            "kasad.com",
+            Ok("kasad.com"),
         );
 
         webring.assert_prev(
             "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
-            "ws://refuse-the-r.ing",
+            Ok("ws://refuse-the-r.ing"),
         );
 
-        webring.assert_next("huh://refuse-the-r.ing", "hrovnyak.gitlab.io");
-        webring.assert_prev("https://kasad.com:3000", None);
-        webring.assert_next("https://kasad.com", "https://clementine.viridian.page");
+        webring.assert_next("huh://refuse-the-r.ing", Ok("hrovnyak.gitlab.io"));
+        webring.assert_prev(
+            "https://kasad.com:3000",
+            Err(TraverseWebringError::AuthorityNotFound(
+                Authority::from_static("kasad.com:3000"),
+            )),
+        );
+        webring.assert_next("https://kasad.com", Ok("https://clementine.viridian.page"));
+        webring.assert_prev(
+            "/relative/uri",
+            Err(TraverseWebringError::NoAuthority(Uri::from_static(
+                "/relative/uri",
+            ))),
+        );
 
         webring.inner.write().unwrap().ordering[0]
             .check_successful
@@ -482,16 +531,16 @@ cynthia — https://clementine.viridian.page — 789 — nONE
 
         webring.assert_next(
             "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
-            "kasad.com",
+            Ok("kasad.com"),
         );
 
         webring.assert_prev(
             "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
-            "ws://refuse-the-r.ing",
+            Ok("ws://refuse-the-r.ing"),
         );
 
-        webring.assert_next("refuse-the-r.ing", "kasad.com");
-        webring.assert_prev("kasad.com", "ws://refuse-the-r.ing");
+        webring.assert_next("refuse-the-r.ing", Ok("kasad.com"));
+        webring.assert_prev("kasad.com", Ok("ws://refuse-the-r.ing"));
 
         let mut found_in_random = HashSet::new();
 
@@ -543,10 +592,44 @@ kian — kasad.com — 456 — NonE
 
         webring.update_from_file().await.unwrap();
 
-        webring.assert_next("clementine.viridian.page", "http://refuse-the-r.ing");
-        webring.assert_next("hrovnyak.gitlab.io", "http://refuse-the-r.ing");
-        webring.assert_next("refuse-the-r.ing", "arhan.sh");
-        webring.assert_next("arhan.sh", "kasad.com");
-        webring.assert_next("kasad.com", "https://clementine.viridian.page");
+        webring.assert_next("clementine.viridian.page", Ok("http://refuse-the-r.ing"));
+        webring.assert_next("hrovnyak.gitlab.io", Ok("http://refuse-the-r.ing"));
+        webring.assert_next("refuse-the-r.ing", Ok("arhan.sh"));
+        webring.assert_next("arhan.sh", Ok("kasad.com"));
+        webring.assert_next("kasad.com", Ok("https://clementine.viridian.page"));
+
+        for i in 0..5 {
+            webring.inner.write().unwrap().ordering[i]
+                .check_successful
+                .store(false, Ordering::Relaxed);
+        }
+
+        webring.assert_next("kasad.com", Err(TraverseWebringError::AllMembersFailing));
+        webring.assert_prev(
+            "clementine.viridian.page",
+            Err(TraverseWebringError::AllMembersFailing),
+        );
+        assert_eq!(webring.random_page(None), None);
+        webring.assert_prev(
+            "clementine.viridian.page",
+            Err(TraverseWebringError::AllMembersFailing),
+        );
+
+        webring.inner.write().unwrap().ordering[3]
+            .check_successful
+            .store(true, Ordering::Relaxed);
+
+        for _ in 0..200 {
+            assert_eq!(
+                webring.random_page(None),
+                Some(Arc::new(Uri::from_static("arhan.sh")))
+            );
+        }
+
+        webring.assert_prev("arhan.sh", Err(TraverseWebringError::AllMembersFailing));
+        webring.assert_next("arhan.sh", Err(TraverseWebringError::AllMembersFailing));
+
+        webring.assert_prev("refuse-the-r.ing", Ok("arhan.sh"));
+        webring.assert_next("kasad.com", Ok("arhan.sh"));
     }
 }

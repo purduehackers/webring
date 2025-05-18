@@ -16,9 +16,9 @@ pedantic = { level = "warn", priority = -1 }
 
 [dependencies]
 axum = "0.8.4"
-chrono = "0.4.41"
+chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.38", features = ["derive"] }
-dashmap = "6.1.0"
+dashmap = { version = "6.1.0", features = ["serde"] }
 eyre = "0.6.12"
 ftail = "0.3.0"
 futures = "0.3.31"
@@ -27,7 +27,9 @@ log = "0.4.27"
 quick-xml = { version = "0.37.5", features = ["async-tokio"] }
 rand = "0.9.1"
 reqwest = { version = "0.12.15", features = ["stream"] }
+serde = { version = "1.0.219", features = ["derive"] }
 surge-ping = "0.8.2"
+thiserror = "2.0.12"
 tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread"] }
 tokio-util = { version = "0.7.15", features = ["io"] }
 tower-http = { version = "0.6.4", features = ["cors", "fs"] }
