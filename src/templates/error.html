@@ -42,6 +42,9 @@
         a:link {
             color: #2874a6;
         }
+        details > summary {
+            cursor: pointer;
+        }
         @media (min-width: 640px) {
             body {
                 margin: 32px;
@@ -89,7 +92,16 @@
             </p>
             <h4>Reason</h4>
             <p>
-            <pre><code>{{ error }}</code></pre>
+            {%- set n_lines = (error | split(pat="
+") | length) -%}
+            {% if n_lines > 5 -%}
+            <details>
+                <summary>Expand error message</summary>
+            {%- endif %}
+                <pre><code>{{ error }}</code></pre>
+            {% if n_lines > 5 -%}
+            </details>
+            {%- endif %}
             </p>
         </div>
 
