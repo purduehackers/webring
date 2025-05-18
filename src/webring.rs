@@ -5,7 +5,7 @@ use std::{
         Arc, RwLock, RwLockReadGuard,
         atomic::{AtomicBool, Ordering},
     },
-    time::SystemTime,
+    time::{Duration, Instant, SystemTime},
 };
 
 use axum::http::{Uri, uri::Authority};
@@ -60,6 +60,7 @@ struct WebringData {
     members_table: HashMap<Authority, usize>,
     ordering: Vec<Member>,
     source_file_last_modified: SystemTime,
+    last_update_check: Instant,
 }
 
 /// The data structure underlying a webring. Implements the core webring functionality.
@@ -72,11 +73,16 @@ pub struct Webring {
     homepage: tokio::sync::RwLock<Option<Arc<Homepage>>>,
     members_file_path: PathBuf,
     static_dir_path: PathBuf,
+    update_check_interval: Duration,
 }
 
 impl Webring {
     /// Create a webring by parsing the file at the given path.
-    pub async fn new(members_file: PathBuf, static_dir: PathBuf) -> eyre::Result<Webring> {
+    pub async fn new(
+        members_file: PathBuf,
+        static_dir: PathBuf,
+        update_check_interval: Duration,
+    ) -> eyre::Result<Webring> {
         let webring_data = parse_file(&members_file).await;
 
         let webring = Webring {
@@ -84,6 +90,7 @@ impl Webring {
             members_file_path: members_file,
             static_dir_path: static_dir,
             homepage: tokio::sync::RwLock::new(None),
+            update_check_interval,
         };
 
         webring.check_members().await?;
@@ -94,10 +101,20 @@ impl Webring {
     /// Re-load the [`Webring`] from its source file if the source file has been modified since the
     /// last time we loaded it.
     ///
+    /// If multiple calls to this function are made within a window of `update_check_interval`,
+    /// only the first call will check the file, and the rest will be a no-op.
+    ///
     /// Any errors returned by [`update_from_file()`] as part of this operation are logged and then
     /// ignored.
     pub async fn try_update(&self) {
-        let last_modified = self.inner.read().unwrap().source_file_last_modified;
+        let (last_update_check, last_modified) = {
+            let inner = self.inner.read().unwrap();
+            (inner.last_update_check, inner.source_file_last_modified)
+        };
+        // If the last update check was recent, we don't need to check again
+        if last_update_check.elapsed() < self.update_check_interval {
+            return;
+        }
         let source_file = &self.members_file_path;
         let metadata = match tokio::fs::metadata(source_file).await {
             Ok(m) => m,
@@ -341,6 +358,7 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
             .await?
             .modified()
             .expect("System does not support file modification timestamp"),
+        last_update_check: Instant::now(),
     };
 
     for line in file_contents.lines().filter(|line| !line.is_empty()) {
@@ -412,6 +430,7 @@ mod tests {
             Arc,
             atomic::{AtomicBool, Ordering},
         },
+        time::{Duration, Instant},
     };
 
     use axum::http::{Uri, uri::Authority};
@@ -472,9 +491,13 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             .unwrap();
         let static_dir = TempDir::new().unwrap();
 
-        let webring = Webring::new(members_file.path().to_owned(), static_dir.path().to_owned())
-            .await
-            .unwrap();
+        let webring = Webring::new(
+            members_file.path().to_owned(),
+            static_dir.path().to_owned(),
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
 
         {
             let inner = webring.inner.read().unwrap();
@@ -672,9 +695,13 @@ kian — kasad.com — 456 — NonE
 
         // Create a webring from this file
         let static_dir = TempDir::new().unwrap();
-        let webring = Webring::new(members_file.path().to_owned(), static_dir.path().to_owned())
-            .await
-            .unwrap();
+        let webring = Webring::new(
+            members_file.path().to_owned(),
+            static_dir.path().to_owned(),
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
 
         // Check initial expected members
         let mut expected_table = HashMap::new();
@@ -714,8 +741,11 @@ kian — kasad.com — 456 — NonE
             .await
             .unwrap();
 
-        // Attempt to update
+        // Check that an update did not happen because not enough time has elapsed since the last
+        // time the file was loaded.
         webring.try_update().await;
+        assert_eq!(webring.inner.read().unwrap().members_table, expected_table);
+        assert_eq!(webring.inner.read().unwrap().ordering, expected_ordering);
 
         // Add last user to expectations
         expected_table.insert(Authority::from_static("refuse-the-r.ing"), 3);
@@ -726,6 +756,12 @@ kian — kasad.com — 456 — NonE
             check_level: CheckLevel::None,
             check_successful: Arc::new(AtomicBool::new(true)),
         });
+
+        // Pretend the last update was 2 minutes ago and try to update
+        webring.inner.write().unwrap().last_update_check = Instant::now()
+            .checked_sub(Duration::from_secs(120))
+            .unwrap();
+        webring.try_update().await;
 
         // Check that new data matches
         assert_eq!(webring.inner.read().unwrap().members_table, expected_table);
