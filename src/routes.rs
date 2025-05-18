@@ -5,17 +5,12 @@ use std::{
 };
 
 use axum::{
-    Router,
-    extract::{Query, State},
-    http::{HeaderMap, Uri, uri::InvalidUri},
-    response::{Html, IntoResponse, NoContent, Redirect, Response},
-    routing::get,
+    body::Body, extract::{Query, State}, http::{uri::InvalidUri, HeaderMap, Uri}, response::{Html, IntoResponse, NoContent, Redirect, Response}, routing::get, Router
 };
 use reqwest::StatusCode;
 use tera::Tera;
 use tower_http::{
-    cors::{Any, CorsLayer},
-    services::ServeDir,
+    catch_panic::{CatchPanicLayer, ResponseForPanic}, cors::{Any, CorsLayer}, services::ServeDir
 };
 
 use crate::{
@@ -39,6 +34,7 @@ pub fn create_router(cli: &CliOptions) -> Router<&'static Webring> {
         .route("/prev", get(serve_previous))
         .route("/previous", get(serve_previous))
         .route("/random", get(serve_random))
+        .layer(CatchPanicLayer::custom(PanicResponse))
 }
 
 fn create_error_template() -> Tera {
@@ -236,14 +232,55 @@ impl IntoResponse for RouteError {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+struct PanicResponse;
+
+impl ResponseForPanic for PanicResponse {
+    type ResponseBody = Body;
+
+    fn response_for_panic(
+        &mut self,
+        err: Box<dyn std::any::Any + Send + 'static>,
+    ) -> axum::http::Response<Self::ResponseBody> {
+        let mut panic_message = String::new();
+        if let Some(name) = std::thread::current().name() {
+            write!(&mut panic_message, "Thread {name} panicked while generating a response: ").unwrap();
+        } else {
+            write!(&mut panic_message, "Thread panicked while generating a response: ").unwrap();
+        }
+        if let Some(str) = err.downcast_ref::<&str>() {
+            panic_message.push_str(str);
+        } else if let Some(string) = err.downcast_ref::<String>() {
+            panic_message.push_str(string);
+        }
+        panic_message.push('\n');
+
+        let bt = std::backtrace::Backtrace::force_capture();
+        write!(&mut panic_message, "{bt}").unwrap();
+
+        let status = StatusCode::INTERNAL_SERVER_ERROR;
+        let mut ctx = tera::Context::new();
+
+        ctx.insert("status_code", &status.as_u16());
+        ctx.insert("status_text", status.canonical_reason().unwrap());
+        ctx.insert("description", "Something unexpected went wrong.");
+        ctx.insert("cargo_pkg_repository", env!("CARGO_PKG_REPOSITORY"));
+        ctx.insert("error", &panic_message);
+
+        let html = ERROR_TEMPLATE.render("error.html", &ctx).unwrap();
+        (status, Html(html)).into_response()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr as _;
 
     use axum::{http::Uri, response::IntoResponse};
     use eyre::eyre;
+    use tower_http::catch_panic::ResponseForPanic;
 
-    use super::{OriginUriLocation, RouteError};
+    use super::{OriginUriLocation, PanicResponse, RouteError};
 
     /// Test rendering src/templates/error.html to make sure it won't panic at runtime.
     #[test]
@@ -260,5 +297,13 @@ mod tests {
         // Try a 500 error
         let error = RouteError::RenderHomepage(eyre!("Fake rendering error"));
         let _ = error.into_response();
+    }
+
+    /// Test rendering src/templates/error.html from a panic to make sure it won't panic at
+    /// runtime.
+    #[test]
+    fn test_render_panic_response() {
+        let mut pr = PanicResponse;
+        let _ = pr.response_for_panic(Box::new("intentional panic"));
     }
 }
