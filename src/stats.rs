@@ -4,7 +4,6 @@
 
 use std::{net::IpAddr, path::PathBuf, sync::atomic::AtomicU64};
 
-use axum::http::{Uri, uri::InvalidUri};
 use chrono::{DateTime, FixedOffset};
 use dashmap::DashMap;
 use sarlacc::Intern;
@@ -15,40 +14,25 @@ const TIMEZONE: chrono::FixedOffset = FixedOffset::west_opt(5 * 3600).unwrap();
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct IpInfo {
     last_seen: u64,
-    started_from: Intern<Uri>,
-    most_recently_at: Intern<Uri>,
+    started_from: Intern<str>,
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Copy, Serialize, Deserialize)]
-#[serde(into = "String", try_from = "&str")]
-struct UriWrapper(Intern<Uri>);
-
-impl From<UriWrapper> for String {
-    fn from(val: UriWrapper) -> Self {
-        val.0.to_string()
-    }
+#[derive(Serialize, Deserialize, Debug)]
+struct Graph {
+    // (From, To) → Started From → Count
+    #[expect(clippy::type_complexity)]
+    graph: DashMap<(Intern<str>, Intern<str>), DashMap<Intern<str>, AtomicU64>>,
 }
 
-impl TryFrom<&str> for UriWrapper {
-    type Error = InvalidUri;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        value.parse::<Uri>().map(|v| UriWrapper(Intern::new(v)))
-    }
-}
-
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 struct AggregatedStats {
-    // Date → (From, To) → Started From → Count
-    graph: DashMap<
-        DateTime<FixedOffset>,
-        DashMap<(UriWrapper, UriWrapper), DashMap<UriWrapper, AtomicU64>>,
-    >,
+    // Date → Graph
+    time_series: DashMap<DateTime<FixedOffset>, Graph>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct Stats {
-    // aggregated: AggregatedStats,
+    aggregated: AggregatedStats,
     data: DashMap<IpAddr, IpInfo>,
 }
 
@@ -57,9 +41,9 @@ impl Stats {
     pub async fn new(stats_file: PathBuf) -> eyre::Result<Stats> {
         Ok(Stats {
             data: DashMap::new(),
-            // aggregated: AggregatedStats {
-            //     graph: DashMap::new(),
-            // },
+            aggregated: AggregatedStats {
+                time_series: DashMap::new(),
+            },
         })
     }
 }
