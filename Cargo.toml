@@ -18,13 +18,14 @@ pedantic = { level = "warn", priority = -1 }
 axum = "0.8.4"
 chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.38", features = ["derive"] }
-dashmap = { version = "6.1.0", features = ["serde"] }
 eyre = "0.6.12"
 ftail = "0.3.0"
 futures = "0.3.31"
 html-escape = "0.2.13"
 log = "0.4.27"
 notify = "8.0.0"
+papaya = { version = "0.2.1", features = ["serde"] }
+parquet = { version = "55.1.0", default-features = false, features = ["flate2"] }
 quick-xml = { version = "0.37.5", features = ["async-tokio"] }
 rand = "0.9.1"
 reqwest = { version = "0.12.15", features = ["stream"] }
