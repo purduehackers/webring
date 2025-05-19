@@ -429,6 +429,7 @@ mod tests {
             Arc,
             atomic::{AtomicBool, Ordering},
         },
+        time::Duration,
     };
 
     use axum::http::{Uri, uri::Authority};
@@ -672,5 +673,30 @@ kian — kasad.com — 456 — NonE
 
         webring.assert_prev("refuse-the-r.ing", Ok("arhan.sh"));
         webring.assert_next("kasad.com", Ok("arhan.sh"));
+    }
+
+    #[tokio::test]
+    async fn test_reload() {
+        let file_contents = "\
+cynthia — https://clementine.viridian.page — 789 — nONE";
+        let file = NamedTempFile::new().unwrap();
+        tokio::fs::write(file.path(), file_contents).await.unwrap();
+        let static_dir = TempDir::new().unwrap();
+        let webring = Arc::new(
+            Webring::new(file.path().to_owned(), static_dir.path().to_owned())
+                .await
+                .unwrap(),
+        );
+        webring.enable_reloading().unwrap();
+        assert_eq!(webring.inner.read().unwrap().ordering.len(), 1);
+        let new_file_contents = "\
+cynthia — https://clementine.viridian.page — 789 — nONE
+kian — kasad.com — 123 — none";
+        tokio::fs::write(file.path(), new_file_contents)
+            .await
+            .unwrap();
+        // Wait for a bit just in case the event takes some time to process
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(webring.inner.read().unwrap().ordering.len(), 2);
     }
 }
