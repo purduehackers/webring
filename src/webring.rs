@@ -54,14 +54,14 @@ impl Member {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct WebringData {
     members_table: HashMap<Authority, usize>,
     ordering: Vec<Member>,
 }
 
 /// The data structure underlying a webring. Implements the core webring functionality.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Webring {
     // https://docs.rs/tokio/latest/tokio/sync/struct.Mutex.html#which-kind-of-mutex-should-you-use
     // This is a good case for std locks because we will never need to hold it across an await
@@ -698,5 +698,20 @@ kian — kasad.com — 123 — none";
         // Wait for a bit just in case the event takes some time to process
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(webring.inner.read().unwrap().ordering.len(), 2);
+    }
+
+    /// Test to ensure that the reloading logic doesn't create a reference cycle and the webring
+    /// does actually get dropped.
+    #[tokio::test]
+    async fn test_reload_gets_dropped() {
+        let file = NamedTempFile::new().unwrap();
+        let webring = Arc::new(Webring {
+            members_file_path: file.path().to_owned(),
+            ..Default::default()
+        });
+        let weak_ptr = Arc::downgrade(&webring);
+        webring.enable_reloading().unwrap();
+        drop(webring);
+        assert!(weak_ptr.upgrade().is_none());
     }
 }
