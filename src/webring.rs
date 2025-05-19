@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{
-        Arc, RwLock, RwLockReadGuard,
+        Arc, OnceLock, RwLock, RwLockReadGuard,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -10,9 +10,10 @@ use std::{
 use axum::http::{Uri, uri::Authority};
 use eyre::eyre;
 use futures::{StreamExt, stream::FuturesUnordered};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rand::seq::SliceRandom;
 
-use log::warn;
+use log::{debug, error, info, warn};
 use thiserror::Error;
 
 use crate::{
@@ -69,6 +70,7 @@ pub struct Webring {
     homepage: tokio::sync::RwLock<Option<Arc<Homepage>>>,
     members_file_path: PathBuf,
     static_dir_path: PathBuf,
+    file_watcher: OnceLock<RecommendedWatcher>,
 }
 
 impl Webring {
@@ -81,6 +83,7 @@ impl Webring {
             members_file_path: members_file,
             static_dir_path: static_dir,
             homepage: tokio::sync::RwLock::new(None),
+            file_watcher: OnceLock::default(),
         };
 
         webring.check_members().await?;
@@ -276,6 +279,56 @@ impl Webring {
 
             Ok(homepage)
         }
+    }
+
+    /// Enable automatic reloading of the webring's data when its members file changes.
+    ///
+    /// This will keep at least one additional reference to `self`, with a lifetime of `'static`.
+    /// I.e., calling this method will cause the given webring to live forever.
+    pub fn enable_reloading(self: &Arc<Self>) -> eyre::Result<()> {
+        // FIXME: This creates a reference cycle, so the given webring will be leaked
+
+        // We need to use a channel to send events, because notify runs the watcher in its own thread
+        // which is not part of the tokio runtime. So we can't run `webring.update_from_file()` in the
+        // closure because that is async and requires an async runtime. Thus we use the channel to
+        // notify an async task that the file should be reloaded.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let self_for_closure = Arc::clone(self);
+        let mut watcher =
+            notify::recommended_watcher(move |maybe_event: notify::Result<notify::Event>| {
+                match maybe_event {
+                    Ok(event) => {
+                        debug!(
+                            "Event observed on {}: {event:#?}",
+                            self_for_closure.members_file_path.display()
+                        );
+                        if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+                            return;
+                        }
+
+                        info!(
+                            "Detected change to {}. Reloading webring.",
+                            self_for_closure.members_file_path.display()
+                        );
+                        tx.blocking_send(()).unwrap();
+                    }
+                    Err(err) => {
+                        error!("Error watching file: {err}");
+                    }
+                }
+            })?;
+        let self_for_task = Arc::clone(self);
+        tokio::spawn(async move {
+            while let Some(()) = rx.recv().await {
+                if let Err(err) = self_for_task.update_from_file().await {
+                    error!("Failed to update webring: {err}");
+                }
+                info!("Webring reloaded");
+            }
+        });
+        watcher.watch(&self.members_file_path, RecursiveMode::NonRecursive)?;
+        let _ = self.file_watcher.set(watcher);
+        Ok(())
     }
 }
 

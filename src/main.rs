@@ -4,15 +4,14 @@ use std::{
     io::{IsTerminal, stderr},
     iter::once,
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::ExitCode,
     sync::Arc,
 };
 
 use clap::{Parser, ValueEnum};
 use ftail::Ftail;
-use log::{LevelFilter, debug, error, info, warn};
-use notify::{EventKind, RecursiveMode, Watcher};
+use log::LevelFilter;
 use routes::create_router;
 use webring::Webring;
 
@@ -117,17 +116,17 @@ async fn main() -> ExitCode {
     let webring = match Webring::new(cli.members_file.clone(), cli.static_dir.clone()).await {
         Ok(w) => Arc::new(w),
         Err(err) => {
-            error!("Failed to create webring: {err}");
+            log::error!("Failed to create webring: {err}");
             return ExitCode::FAILURE;
         }
     };
 
     // Create member file watcher
-    if let Err(err) = create_webring_reloader(Arc::clone(&webring), &cli.members_file) {
-        error!("Unable to watch member file for changes: {err}");
-        warn!("Webring will not reload automatically.");
+    if let Err(err) = webring.enable_reloading() {
+        log::error!("Unable to watch member file for changes: {err}");
+        log::warn!("Webring will not reload automatically.");
     }
-    info!("Watching {} for changes", cli.members_file.display());
+    log::info!("Watching {} for changes", cli.members_file.display());
 
     // Start server
     let router = create_router(&cli).with_state(Arc::clone(&webring));
@@ -135,51 +134,14 @@ async fn main() -> ExitCode {
     match tokio::net::TcpListener::bind(bind_addr).await {
         // Unwrapping this is fine because it will never resolve
         Ok(listener) => {
-            info!("Listening on http://{bind_addr}");
+            log::info!("Listening on http://{bind_addr}");
             axum::serve(listener, router).await.unwrap();
         }
         Err(err) => {
-            error!("Failed to listen on {bind_addr}: {err}");
+            log::error!("Failed to listen on {bind_addr}: {err}");
             return ExitCode::FAILURE;
         }
     }
 
     ExitCode::SUCCESS
-}
-
-fn create_webring_reloader(webring: Arc<Webring>, members_file: &Path) -> eyre::Result<()> {
-    // We need to use a channel to send events, because notify runs the watcher in its own thread
-    // which is not part of the tokio runtime. So we can't run `webring.update_from_file()` in the
-    // closure because that is async and requires an async runtime. Thus we use the channel to
-    // notify an async task that the file should be reloaded.
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let path = members_file.to_owned();
-    let mut watcher =
-        notify::recommended_watcher(move |maybe_event: notify::Result<notify::Event>| {
-            match maybe_event {
-                Ok(event) => {
-                    debug!("Event observed on {}: {event:#?}", path.display());
-                    if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
-                        return;
-                    }
-
-                    info!("Detected change to {}. Reloading webring.", path.display());
-                    tx.blocking_send(()).unwrap();
-                }
-                Err(err) => {
-                    error!("Error watching file: {err}");
-                }
-            }
-        })?;
-    tokio::spawn(async move {
-        while let Some(()) = rx.recv().await {
-            if let Err(err) = webring.update_from_file().await {
-                error!("Failed to update webring: {err}");
-            }
-            info!("Webring reloaded");
-        }
-    });
-    watcher.watch(members_file, RecursiveMode::NonRecursive)?;
-    Box::leak(Box::new(watcher)); // The watcher only works while it exists
-    Ok(())
 }
