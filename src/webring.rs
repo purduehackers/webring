@@ -34,6 +34,7 @@ pub enum CheckLevel {
 struct Member {
     name: String,
     website: Intern<Uri>,
+    authority: Intern<str>,
     discord_id: String,
     check_level: CheckLevel,
     check_successful: Arc<AtomicBool>,
@@ -60,7 +61,7 @@ impl Member {
 
 #[derive(Clone, Debug, Default)]
 struct WebringData {
-    members_table: HashMap<Authority, usize>,
+    members_table: HashMap<Intern<str>, usize>,
     ordering: Vec<Member>,
 }
 
@@ -160,14 +161,16 @@ impl Webring {
         &self,
         uri: &Uri,
     ) -> Result<(usize, RwLockReadGuard<'_, WebringData>), TraverseWebringError> {
-        let inner = self.inner.read().unwrap();
         let authority = uri
             .authority()
             .ok_or_else(|| TraverseWebringError::NoAuthority(uri.to_owned()))?;
+        let interned = Intern::get_ref(authority.as_str())
+            .ok_or_else(|| TraverseWebringError::AuthorityNotFound(authority.to_owned()))?;
+        let inner = self.inner.read().unwrap();
         Ok((
             *inner
                 .members_table
-                .get(authority)
+                .get(&interned)
                 .ok_or_else(|| TraverseWebringError::AuthorityNotFound(authority.to_owned()))?,
             inner,
         ))
@@ -426,13 +429,14 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
         let uri = split[1].parse::<Uri>()?;
 
         let authority = match uri.authority() {
-            Some(v) => v.to_owned(),
+            Some(v) => Intern::from_ref(v.as_str()),
             None => return Err(eyre!("URLs must not be relative. Got: {uri}")),
         };
 
         let member = Member {
             name: split[0].to_owned(),
             website: Intern::new(uri),
+            authority,
             discord_id: split[2].to_owned(),
             check_level,
             check_successful: Arc::new(AtomicBool::new(false)),
@@ -544,10 +548,10 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             let inner = webring.inner.read().unwrap();
 
             let mut expected_table = HashMap::new();
-            expected_table.insert(Authority::from_static("hrovnyak.gitlab.io"), 0);
-            expected_table.insert(Authority::from_static("kasad.com"), 1);
-            expected_table.insert(Authority::from_static("clementine.viridian.page"), 2);
-            expected_table.insert(Authority::from_static("refuse-the-r.ing"), 3);
+            expected_table.insert(Intern::from_ref("hrovnyak.gitlab.io"), 0);
+            expected_table.insert(Intern::from_ref("kasad.com"), 1);
+            expected_table.insert(Intern::from_ref("clementine.viridian.page"), 2);
+            expected_table.insert(Intern::from_ref("refuse-the-r.ing"), 3);
 
             assert_eq!(inner.members_table, expected_table);
 
@@ -555,6 +559,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                 Member {
                     name: "henry".to_owned(),
                     website: Intern::new(Uri::from_static("hrovnyak.gitlab.io")),
+                    authority: Intern::from_ref("hrovnyak.gitlab.io"),
                     discord_id: "123".to_owned(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
@@ -562,6 +567,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                 Member {
                     name: "kian".to_owned(),
                     website: Intern::new(Uri::from_static("kasad.com")),
+                    authority: Intern::from_ref("kasad.com"),
                     discord_id: "456".to_owned(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
@@ -569,6 +575,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                 Member {
                     name: "cynthia".to_owned(),
                     website: Intern::new(Uri::from_static("https://clementine.viridian.page")),
+                    authority: Intern::from_ref("clementine.viridian.page"),
                     discord_id: "789".to_owned(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
@@ -576,6 +583,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                 Member {
                     name: "???".to_owned(),
                     website: Intern::new(Uri::from_static("ws://refuse-the-r.ing")),
+                    authority: Intern::from_ref("refuse-the-r.ing"),
                     discord_id: "bruh".to_owned(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
