@@ -9,11 +9,10 @@ use std::{
 
 use axum::http::{Uri, uri::Authority};
 use eyre::eyre;
-use futures::{StreamExt, future::join, stream::FuturesUnordered};
+use futures::{StreamExt, stream::FuturesUnordered};
 use rand::seq::SliceRandom;
 
 use log::warn;
-use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
@@ -73,29 +72,15 @@ pub struct Webring {
 
 impl Webring {
     /// Create a webring by parsing the file at the given path.
-    ///
-    /// Leaks the webring object to make a singleton value.
-    ///
-    /// Panics if called twice in the lifetime of the process.
-    pub async fn new(
-        members_file: PathBuf,
-        static_dir: PathBuf,
-    ) -> eyre::Result<&'static Webring> {
-        static CALLED_NEW_ALREADY: AtomicBool = AtomicBool::new(false);
+    pub async fn new(members_file: PathBuf, static_dir: PathBuf) -> eyre::Result<Webring> {
+        let webring_data = parse_file(&members_file).await?;
 
-        assert!(
-            !CALLED_NEW_ALREADY.swap(true, Ordering::Relaxed),
-            "Cannot call Webring::new() twice in the lifetime of the program."
-        );
-
-        let webring_data = parse_file(&members_file).await;
-
-        let webring = &*Box::leak::<'static>(Box::new(Webring {
-            inner: RwLock::new(webring_data?),
+        let webring = Webring {
+            inner: RwLock::new(webring_data),
             members_file_path: members_file,
             static_dir_path: static_dir,
             homepage: tokio::sync::RwLock::new(None),
-        }));
+        };
 
         webring.check_members().await?;
 
@@ -451,12 +436,9 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         .unwrap();
         let static_dir = TempDir::new().unwrap();
 
-        let webring = Webring::new(
-            members_file.path().to_owned(),
-            static_dir.path().to_owned(),
-        )
-        .await
-        .unwrap();
+        let webring = Webring::new(members_file.path().to_owned(), static_dir.path().to_owned())
+            .await
+            .unwrap();
 
         {
             let inner = webring.inner.read().unwrap();
