@@ -1430,6 +1430,7 @@ dependencies = [
  "reqwest",
  "same-file",
  "serde",
+ "serde_json",
  "surge-ping",
  "tempfile",
  "tera",
