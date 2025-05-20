@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
 };
 
+use axum::http::{Uri, uri::Scheme};
 use clap::{Parser, ValueEnum};
 use ftail::Ftail;
 use log::LevelFilter;
@@ -53,6 +54,33 @@ struct CliOptions {
     /// File to read member database from
     #[arg(short = 'm', long)]
     members_file: PathBuf,
+
+    #[arg(short = 'a', long, default_value = "https://ring.purduehackers.com", value_parser = parse_uri)]
+    address: Uri,
+}
+
+fn parse_uri(str: &str) -> eyre::Result<Uri> {
+    let uri = str.parse::<Uri>()?;
+
+    if !uri.path().trim_matches('/').is_empty() {
+        return Err(eyre::eyre!(
+            "Expected the address URI to not have a path component."
+        ));
+    }
+
+    if ![None, Some(&Scheme::HTTPS), Some(&Scheme::HTTP)].contains(&uri.scheme()) {
+        return Err(eyre::eyre!(
+            "Expected the scheme to be either `HTTP` or `HTTPS`"
+        ));
+    }
+
+    if uri.authority().is_none() {
+        return Err(eyre::eyre!(
+            "Expected the address URI to have an authority component (to not be a relative path)."
+        ));
+    }
+
+    Ok(uri)
 }
 
 // This type exists so clap can figure out what variants are available for the verbosity option.
@@ -113,7 +141,13 @@ async fn main() -> ExitCode {
     }
 
     // Create webring data structure
-    let webring = match Webring::new(cli.members_file.clone(), cli.static_dir.clone()).await {
+    let webring = match Webring::new(
+        cli.members_file.clone(),
+        cli.static_dir.clone(),
+        cli.address.clone(),
+    )
+    .await
+    {
         Ok(w) => Arc::new(w),
         Err(err) => {
             log::error!("Failed to create webring: {err}");
