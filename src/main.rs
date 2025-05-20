@@ -6,11 +6,12 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     process::ExitCode,
+    sync::Arc,
 };
 
 use clap::{Parser, ValueEnum};
 use ftail::Ftail;
-use log::{LevelFilter, error, info};
+use log::LevelFilter;
 use routes::create_router;
 use webring::Webring;
 
@@ -112,30 +113,32 @@ async fn main() -> ExitCode {
     }
 
     // Create webring data structure
-    let webring = match Webring::new(
-        cli.members_file.clone(),
-        cli.static_dir.clone(),
-    )
-    .await
-    {
-        Ok(w) => w,
+    let webring = match Webring::new(cli.members_file.clone(), cli.static_dir.clone()).await {
+        Ok(w) => Arc::new(w),
         Err(err) => {
-            error!("Failed to create webring: {err}");
+            log::error!("Failed to create webring: {err}");
             return ExitCode::FAILURE;
         }
     };
 
+    // Create member file watcher
+    if let Err(err) = webring.enable_reloading() {
+        log::error!("Unable to watch member file for changes: {err}");
+        log::warn!("Webring will not reload automatically.");
+    }
+    log::info!("Watching {} for changes", cli.members_file.display());
+
     // Start server
-    let router = create_router(&cli).with_state(webring);
+    let router = create_router(&cli).with_state(Arc::clone(&webring));
     let bind_addr = &cli.listen_addr;
     match tokio::net::TcpListener::bind(bind_addr).await {
         // Unwrapping this is fine because it will never resolve
         Ok(listener) => {
-            info!("Listening on http://{bind_addr}");
+            log::info!("Listening on http://{bind_addr}");
             axum::serve(listener, router).await.unwrap();
         }
         Err(err) => {
-            error!("Failed to listen on {bind_addr}: {err}");
+            log::error!("Failed to listen on {bind_addr}: {err}");
             return ExitCode::FAILURE;
         }
     }
