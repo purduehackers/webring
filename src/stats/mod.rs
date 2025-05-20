@@ -5,6 +5,8 @@
 mod parquet_encoding;
 
 use std::{
+    fs::File,
+    io::ErrorKind,
     net::IpAddr,
     path::PathBuf,
     sync::{
@@ -14,14 +16,15 @@ use std::{
 };
 
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, Utc};
+use eyre::Report;
 use log::error;
 use papaya::HashMap;
-use parquet_encoding::encode_parquet;
+use parquet_encoding::{decode_parquet, encode_parquet};
 use sarlacc::Intern;
-use tokio::sync::{mpsc, oneshot};
+use tokio::{select, sync::watch};
 
 const IP_TRACKING_TTL: chrono::TimeDelta = Duration::days(1);
-const JSON_STATS_TTL: chrono::TimeDelta = Duration::minutes(1);
+const PARQUET_STATS_TTL: chrono::TimeDelta = Duration::minutes(1);
 const TIMEZONE: chrono::FixedOffset = FixedOffset::west_opt(5 * 3600).unwrap();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -37,79 +40,97 @@ struct AggregatedStats {
     counters: HashMap<(NaiveDate, Intern<str>, Intern<str>, Intern<str>), AtomicU64>,
 }
 
-type JSONCacheMessage = (
-    oneshot::Sender<parquet::errors::Result<Arc<[u8]>>>,
-    DateTime<Utc>,
-);
-
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Stats {
     aggregated: Arc<AggregatedStats>,
     ip_tracking: HashMap<IpAddr, IpInfo>,
-    json_cache_channel: mpsc::Sender<JSONCacheMessage>,
+    parquet_file: watch::Receiver<Option<Arc<[u8]>>>,
+}
+
+impl Default for Stats {
+    fn default() -> Self {
+        let (_, rx) = watch::channel(None);
+
+        Self {
+            aggregated: Arc::new(AggregatedStats::default()),
+            ip_tracking: HashMap::default(),
+            parquet_file: rx,
+        }
+    }
 }
 
 impl Stats {
-    #[expect(clippy::unused_async)]
     pub async fn new(stats_file: PathBuf) -> eyre::Result<Stats> {
-        Ok(Self::new_empty())
+        let decoded = match File::open(&stats_file) {
+            Ok(file) => tokio::task::spawn_blocking(move || decode_parquet(file))
+                .await
+                .unwrap()?,
+            Err(e) => match e.kind() {
+                ErrorKind::NotFound => AggregatedStats {
+                    counters: HashMap::new(),
+                },
+                _ => return Err(Report::from(e)),
+            },
+        };
+
+        let aggregated = Arc::new(decoded);
+
+        let (tx, rx) = watch::channel(None);
+        Self::spawn_parquet_task(Arc::clone(&aggregated), tx, stats_file);
+
+        Ok(Self::new_from_data(aggregated, rx))
     }
 
-    fn new_empty() -> Stats {
-        let aggregated = Arc::new(AggregatedStats {
-            counters: HashMap::new(),
-        });
-
+    fn new_from_data(
+        aggregated: Arc<AggregatedStats>,
+        rx: watch::Receiver<Option<Arc<[u8]>>>,
+    ) -> Stats {
         Stats {
             ip_tracking: HashMap::new(),
-            json_cache_channel: Self::spawn_json_task(Arc::clone(&aggregated)),
+            parquet_file: rx,
             aggregated,
         }
     }
 
-    fn spawn_json_task(aggregated: Arc<AggregatedStats>) -> mpsc::Sender<JSONCacheMessage> {
-        let (tx, mut rx) = mpsc::channel::<JSONCacheMessage>(256);
-
+    fn spawn_parquet_task(
+        aggregated: Arc<AggregatedStats>,
+        tx: watch::Sender<Option<Arc<[u8]>>>,
+        stats_file: PathBuf,
+    ) {
         tokio::spawn(async move {
-            let mut cache = None;
-            let mut last_computed = DateTime::<Utc>::MIN_UTC;
+            let ttl_duration = PARQUET_STATS_TTL.to_std().unwrap();
 
-            while let Some((json_tx, now)) = rx.recv().await {
-                if now - last_computed > JSON_STATS_TTL {
-                    cache = None;
-                }
+            loop {
+                let sleep_task = tokio::time::sleep(ttl_duration);
 
-                let data = if let Some(data) = &cache {
-                    Arc::clone(data)
-                } else {
-                    last_computed = now;
-                    let aggregated_for_task = Arc::clone(&aggregated);
-                    let new_data = match tokio::task::spawn_blocking(move || {
-                        encode_parquet(&aggregated_for_task)
-                    })
+                let aggregated_for_task = Arc::clone(&aggregated);
+                match tokio::task::spawn_blocking(move || encode_parquet(&aggregated_for_task))
                     .await
                     .unwrap()
-                    {
-                        Ok(v) => Arc::from(v),
-                        Err(e) => {
+                {
+                    Ok(v) => {
+                        if let Err(e) = tokio::fs::write(&stats_file, &v).await {
                             error!("{e}");
-                            // Dropping the oneshot is a bug
-                            json_tx.send(Err(e)).unwrap();
-                            continue;
                         }
-                    };
 
-                    cache = Some(Arc::clone(&new_data));
+                        if tx.send(Some(Arc::from(v))).is_err() {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        error!("{e}");
+                        if tx.send(None).is_err() {
+                            return;
+                        }
+                    }
+                }
 
-                    new_data
+                select! {
+                    () = sleep_task => {}
+                    () = tx.closed() => return
                 };
-
-                // Dropping the oneshot is a bug
-                json_tx.send(Ok(data)).unwrap();
             }
         });
-
-        tx
     }
 
     pub fn redirected(&self, ip: IpAddr, from: Intern<str>, to: Intern<str>) {
@@ -149,25 +170,25 @@ impl Stats {
             .retain(|_ip_addr, info| now - info.last_seen > IP_TRACKING_TTL);
     }
 
-    async fn get_json(&self) -> parquet::errors::Result<Arc<[u8]>> {
-        self.get_json_impl(Utc::now()).await
-    }
-
-    async fn get_json_impl(&self, now: DateTime<Utc>) -> parquet::errors::Result<Arc<[u8]>> {
-        let (tx, rx) = oneshot::channel();
-
-        // It is a bug if the task exits early so unwrapping the channels is OK
-        self.json_cache_channel.send((tx, now)).await.unwrap();
-        rx.await.unwrap()
+    fn get_parquet(&self) -> Option<Arc<[u8]>> {
+        (*self.parquet_file.borrow()).as_ref().map(Arc::clone)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::net::IpAddr;
+    use std::{net::IpAddr, sync::Arc};
 
+    use axum::body::Bytes;
     use chrono::{DateTime, Utc};
+    use papaya::HashMap;
     use sarlacc::Intern;
+    use tokio::sync::watch;
+
+    use crate::stats::{
+        AggregatedStats,
+        parquet_encoding::{decode_parquet, encode_parquet},
+    };
 
     use super::Stats;
 
@@ -185,7 +206,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_stat_tracking() {
-        let stats = Stats::new_empty();
+        let (_, rx) = watch::channel(None);
+        let stats = Stats::new_from_data(
+            Arc::new(AggregatedStats {
+                counters: HashMap::new(),
+            }),
+            rx,
+        );
 
         stats.redirected_impl(a("0.0.0.0"), i("a.com"), i("b.com"), t(0));
         stats.redirected_impl(a("0.0.0.0"), i("b.com"), i("c.com"), t(1));
@@ -194,6 +221,7 @@ mod tests {
         stats.redirected_impl(a("1.0.0.0"), i("c.com"), i("b.com"), t(1));
         stats.redirected_impl(a("1.0.0.0"), i("b.com"), i("a.com"), t(2));
 
-        panic!("{:?}", stats.get_json_impl(t(3)).await.unwrap().len());
+        let parquet = encode_parquet(&stats.aggregated).unwrap();
+        let decoded = decode_parquet(Bytes::from(Box::from(&*parquet))).unwrap();
     }
 }
