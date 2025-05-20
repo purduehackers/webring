@@ -1,9 +1,6 @@
-use std::{error::Error, fmt::Display, io::ErrorKind, sync::LazyLock};
+use std::{error::Error, fmt::Display, io::ErrorKind};
 
-use axum::http::{
-    Uri,
-    uri::{Authority, Scheme},
-};
+use axum::http::{Uri, uri::Scheme};
 use chrono::Utc;
 use eyre::Report;
 use futures::TryStreamExt;
@@ -13,8 +10,6 @@ use tokio::sync::RwLock;
 use tokio_util::io::StreamReader;
 
 use crate::webring::CheckLevel;
-
-static ADDRESS: &str = "https://ring.purduehackers.com";
 
 static ONLINE_CHECK_TTL_MS: i64 = 1000;
 
@@ -68,8 +63,8 @@ async fn is_online() -> bool {
 ///
 /// Returns Some with the result, or None if the server seems to be not connected to the internet.
 #[allow(clippy::unused_async)]
-pub async fn check(website: &Uri, check_level: CheckLevel) -> Option<bool> {
-    match check_impl(website, check_level).await {
+pub async fn check(website: &Uri, check_level: CheckLevel, base_address: Uri) -> Option<bool> {
+    match check_impl(website, check_level, base_address).await {
         Ok(()) => Some(true),
         Err(e) => {
             // TODO: Discord
@@ -85,7 +80,7 @@ pub async fn check(website: &Uri, check_level: CheckLevel) -> Option<bool> {
     }
 }
 
-async fn check_impl(website: &Uri, check_level: CheckLevel) -> eyre::Result<()> {
+async fn check_impl(website: &Uri, check_level: CheckLevel, base_address: Uri) -> eyre::Result<()> {
     match check_level {
         CheckLevel::ForLinks => {
             let res = reqwest::get(website.to_string())
@@ -97,9 +92,10 @@ async fn check_impl(website: &Uri, check_level: CheckLevel) -> eyre::Result<()> 
             let stream = res.bytes_stream();
 
             // Adapt the stream type returned by reqwest to the type expected by quick_xml
-            match contains_link(StreamReader::new(
-                stream.map_err(|e| std::io::Error::new(ErrorKind::Other, e)),
-            ))
+            match contains_link(
+                StreamReader::new(stream.map_err(|e| std::io::Error::new(ErrorKind::Other, e))),
+                base_address,
+            )
             .await
             {
                 None => Ok(()),
@@ -120,6 +116,7 @@ async fn check_impl(website: &Uri, check_level: CheckLevel) -> eyre::Result<()> 
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct MissingLinks {
+    base_address: Uri,
     pub home: bool,
     pub next: bool,
     pub prev: bool,
@@ -128,14 +125,13 @@ pub struct MissingLinks {
 impl MissingLinks {
     /// Should be called for every link on the page. If the inputted link matches any of the expected links, mark it as found.
     fn found_link(&mut self, link: &Uri) {
-        static AUTHORITY: LazyLock<Authority> =
-            LazyLock::new(|| Uri::from_static(ADDRESS).into_parts().authority.unwrap());
+        let authority = self.base_address.authority().unwrap();
 
         if ![None, Some(&Scheme::HTTPS), Some(&Scheme::HTTP)].contains(&link.scheme()) {
             return;
         }
 
-        if link.authority() != Some(&*AUTHORITY) {
+        if link.authority() != Some(authority) {
             return;
         }
 
@@ -152,15 +148,16 @@ impl MissingLinks {
 
 impl Display for MissingLinks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let address = &self.base_address;
         writeln!(f, "Your webpage is missing the following links:")?;
         if self.home {
-            writeln!(f, "- {ADDRESS}")?;
+            writeln!(f, "- {address}")?;
         }
         if self.next {
-            writeln!(f, "- {ADDRESS}/next")?;
+            writeln!(f, "- {address}/next")?;
         }
         if self.prev {
-            writeln!(f, "- {ADDRESS}/prev")?;
+            writeln!(f, "- {address}/prev")?;
         }
 
         writeln!(
@@ -175,13 +172,17 @@ impl Display for MissingLinks {
 
 impl Error for MissingLinks {}
 
-async fn contains_link(webpage: impl tokio::io::AsyncBufRead + Unpin) -> Option<MissingLinks> {
+async fn contains_link(
+    webpage: impl tokio::io::AsyncBufRead + Unpin,
+    base_address: Uri,
+) -> Option<MissingLinks> {
     // Streams HTML tokens
     let mut reader = Reader::from_reader(webpage);
 
     let decoder = reader.decoder();
 
     let mut missing_links = MissingLinks {
+        base_address,
         home: true,
         next: true,
         prev: true,
@@ -245,19 +246,34 @@ async fn contains_link(webpage: impl tokio::io::AsyncBufRead + Unpin) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use super::{ADDRESS, MissingLinks, contains_link};
+    use axum::http::Uri;
 
-    async fn assert_links_gives(file: &str, res: impl Into<Option<(bool, bool, bool)>>) {
+    use super::{MissingLinks, contains_link};
+
+    async fn assert_links_gives(
+        base_address: &'static str,
+        file: &str,
+        res: impl Into<Option<(bool, bool, bool)>>,
+    ) {
         assert_eq!(
-            contains_link(file.replace("ADDRESS", ADDRESS).as_bytes()).await,
-            res.into()
-                .map(|(home, prev, next)| MissingLinks { home, next, prev })
+            contains_link(
+                file.replace("ADDRESS", base_address).as_bytes(),
+                Uri::from_static(base_address)
+            )
+            .await,
+            res.into().map(|(home, prev, next)| MissingLinks {
+                home,
+                next,
+                prev,
+                base_address: Uri::from_static(base_address)
+            })
         );
     }
 
     #[tokio::test]
     async fn all_links() {
         assert_links_gives(
+            "https://ring.purduehackers.com",
             "<body>
                 <a href=\"ADDRESS/\"></a>
                 <a href=\"ADDRESS/prev\"></a>
@@ -271,6 +287,7 @@ mod tests {
     #[tokio::test]
     async fn just_home() {
         assert_links_gives(
+            "http://purduehackers.com/",
             "<div>
                 <a href=\"ADDRESS\"></a>
             </div>",
@@ -282,8 +299,9 @@ mod tests {
     #[tokio::test]
     async fn just_prev() {
         assert_links_gives(
+            "https://purduehackers.com/",
             "<carousel>
-                <a href=\"ADDRESS/prev?query=huh\"></a>
+                <a href=\"ADDRESSprev?query=huh\"></a>
             </carousel>",
             (true, false, true),
         )
@@ -293,8 +311,9 @@ mod tests {
     #[tokio::test]
     async fn just_previous() {
         assert_links_gives(
+            "https://x/",
             "<carousel>
-                <a href=\"ADDRESS/previous?query=huh\"></a>
+                <a href=\"ADDRESSprevious?query=huh\"></a>
             </carousel>",
             (true, false, true),
         )
@@ -304,8 +323,9 @@ mod tests {
     #[tokio::test]
     async fn just_next() {
         assert_links_gives(
+            "https://uz/",
             "<body>
-                <a href=\"ADDRESS/next/\"></a>
+                <a href=\"ADDRESSnext/\"></a>
             </body>",
             (true, true, false),
         )
@@ -315,6 +335,7 @@ mod tests {
     #[tokio::test]
     async fn random_links() {
         assert_links_gives(
+            "https://ring.purduehackers.com",
             "
             <!-- ADDRESSS -->
             <!-- ADDRESSS/prev -->
@@ -337,6 +358,7 @@ mod tests {
     #[tokio::test]
     async fn alternate_elements_all() {
         assert_links_gives(
+            "https://ring.purduehackers.com",
             "<table>
                 <b data-phwebring=\"home\"></b>
                 <b data-phwebring=\"next\"></b>
@@ -350,6 +372,7 @@ mod tests {
     #[tokio::test]
     async fn alternate_elements_just_home() {
         assert_links_gives(
+            "https://ring.purduehackers.com",
             "<div>
                 <b data-phwebring=\"home\"></b>
             </div>",
@@ -361,6 +384,7 @@ mod tests {
     #[tokio::test]
     async fn alternate_elements_just_prev() {
         assert_links_gives(
+            "https://ring.purduehackers.com",
             "<body>
                 <b data-phwebring=\"prev\"></b>
             </body>",
@@ -372,6 +396,7 @@ mod tests {
     #[tokio::test]
     async fn alternate_elements_just_previous() {
         assert_links_gives(
+            "https://ring.purduehackers.com",
             "<body>
                 <b data-phwebring=\"previous\"></b>
             </body>",
@@ -383,6 +408,7 @@ mod tests {
     #[tokio::test]
     async fn alternate_elements_just_next() {
         assert_links_gives(
+            "https://ring.purduehackers.com",
             "<body>
                 <b data-phwebring=\"next\"></b>
             </body>",

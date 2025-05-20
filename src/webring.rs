@@ -39,13 +39,16 @@ struct Member {
 }
 
 impl Member {
-    fn check_and_store(&self) -> impl Future<Output = eyre::Result<()>> + Send + 'static {
+    fn check_and_store(
+        &self,
+        base_address: Uri,
+    ) -> impl Future<Output = eyre::Result<()>> + Send + 'static {
         let website = Arc::clone(&self.website);
         let check_level = self.check_level;
         let successful = Arc::clone(&self.check_successful);
 
         async move {
-            if let Some(v) = check(&website, check_level).await {
+            if let Some(v) = check(&website, check_level, base_address).await {
                 successful.store(v, Ordering::Relaxed);
             }
 
@@ -71,11 +74,16 @@ pub struct Webring {
     members_file_path: PathBuf,
     static_dir_path: PathBuf,
     file_watcher: OnceLock<RecommendedWatcher>,
+    base_address: Uri,
 }
 
 impl Webring {
     /// Create a webring by parsing the file at the given path.
-    pub async fn new(members_file: PathBuf, static_dir: PathBuf) -> eyre::Result<Webring> {
+    pub async fn new(
+        members_file: PathBuf,
+        static_dir: PathBuf,
+        base_address: Uri,
+    ) -> eyre::Result<Webring> {
         let webring_data = parse_file(&members_file).await?;
 
         let webring = Webring {
@@ -84,6 +92,7 @@ impl Webring {
             static_dir_path: static_dir,
             homepage: tokio::sync::RwLock::new(None),
             file_watcher: OnceLock::default(),
+            base_address,
         };
 
         webring.check_members().await?;
@@ -109,7 +118,9 @@ impl Webring {
                         new_members.ordering[*idx].check_successful = check_successful;
                     }
                     None => {
-                        tasks.push(new_members.ordering[*idx].check_and_store());
+                        tasks.push(
+                            new_members.ordering[*idx].check_and_store(self.base_address.clone()),
+                        );
                     }
                 }
             }
@@ -132,7 +143,7 @@ impl Webring {
             let inner = self.inner.read().unwrap();
 
             for member in &inner.ordering {
-                tasks.push(member.check_and_store());
+                tasks.push(member.check_and_store(self.base_address.clone()));
             }
         }
 
@@ -516,9 +527,13 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         .unwrap();
         let static_dir = TempDir::new().unwrap();
 
-        let webring = Webring::new(members_file.path().to_owned(), static_dir.path().to_owned())
-            .await
-            .unwrap();
+        let webring = Webring::new(
+            members_file.path().to_owned(),
+            static_dir.path().to_owned(),
+            Uri::from_static("https://ring.purduehackers.com"),
+        )
+        .await
+        .unwrap();
 
         {
             let inner = webring.inner.read().unwrap();
@@ -730,9 +745,13 @@ cynthia — https://clementine.viridian.page — 789 — nONE";
             .await
             .unwrap();
         let webring = Arc::new(
-            Webring::new(members_file.clone(), static_dir)
-                .await
-                .unwrap(),
+            Webring::new(
+                members_file.clone(),
+                static_dir,
+                Uri::from_static("https://ring.purduehackers.com"),
+            )
+            .await
+            .unwrap(),
         );
         webring.enable_reloading().unwrap();
         assert_eq!(webring.inner.read().unwrap().ordering.len(), 1);
