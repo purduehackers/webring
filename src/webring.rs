@@ -8,7 +8,7 @@ use std::{
 };
 
 use axum::http::{Uri, uri::Authority};
-use eyre::eyre;
+use eyre::{Context, eyre};
 use futures::{StreamExt, stream::FuturesUnordered};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rand::seq::SliceRandom;
@@ -18,6 +18,7 @@ use thiserror::Error;
 
 use crate::{
     checking::check,
+    discord::{DiscordNotifier, Snowflake},
     homepage::{Homepage, MemberForHomepage},
 };
 
@@ -33,23 +34,35 @@ struct Member {
     name: String,
     website: Arc<Uri>,
     #[allow(dead_code)] // FIXME: Remove once Discord integration is implemented
-    discord_id: String,
+    discord_id: Snowflake,
     check_level: CheckLevel,
     check_successful: Arc<AtomicBool>,
 }
 
 impl Member {
-    fn check_and_store(
+    fn check_and_store_and_optionally_notify(
         &self,
         base_address: Uri,
+        notifier: Option<Arc<DiscordNotifier>>,
     ) -> impl Future<Output = eyre::Result<()>> + Send + 'static {
         let website = Arc::clone(&self.website);
         let check_level = self.check_level;
         let successful = Arc::clone(&self.check_successful);
 
+        let discord_id_for_block = self.discord_id;
         async move {
-            if let Some(v) = check(&website, check_level, base_address).await {
-                successful.store(v, Ordering::Relaxed);
+            if let Some(failure) = check(&website, check_level, base_address).await {
+                successful.store(false, Ordering::Relaxed);
+                if let Some(notifier) = notifier {
+                    tokio::spawn(async move {
+                        notifier.send_message(
+                            Some(discord_id_for_block),
+                            &format!("Your site ({website}) failed validation for the following reason:\n{failure}"),
+                        ).await.unwrap();
+                    });
+                }
+            } else {
+                successful.store(true, Ordering::Relaxed);
             }
 
             Ok(())
@@ -75,6 +88,7 @@ pub struct Webring {
     static_dir_path: PathBuf,
     file_watcher: OnceLock<RecommendedWatcher>,
     base_address: Uri,
+    notifier: Option<Arc<DiscordNotifier>>,
 }
 
 impl Webring {
@@ -83,6 +97,7 @@ impl Webring {
         members_file: PathBuf,
         static_dir: PathBuf,
         base_address: Uri,
+        notifier: Option<DiscordNotifier>,
     ) -> eyre::Result<Webring> {
         let webring_data = parse_file(&members_file).await?;
 
@@ -93,6 +108,7 @@ impl Webring {
             homepage: tokio::sync::RwLock::new(None),
             file_watcher: OnceLock::default(),
             base_address,
+            notifier: notifier.map(Arc::new),
         };
 
         webring.check_members().await?;
@@ -119,7 +135,10 @@ impl Webring {
                     }
                     None => {
                         tasks.push(
-                            new_members.ordering[*idx].check_and_store(self.base_address.clone()),
+                            new_members.ordering[*idx].check_and_store_and_optionally_notify(
+                                self.base_address.clone(),
+                                self.notifier.as_ref().map(Arc::clone),
+                            ),
                         );
                     }
                 }
@@ -143,7 +162,9 @@ impl Webring {
             let inner = self.inner.read().unwrap();
 
             for member in &inner.ordering {
-                tasks.push(member.check_and_store(self.base_address.clone()));
+                tasks.push(
+                    member.check_and_store_and_optionally_notify(self.base_address.clone(), None),
+                );
             }
         }
 
@@ -431,7 +452,7 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
         let member = Member {
             name: split[0].to_owned(),
             website: Arc::from(uri),
-            discord_id: split[2].to_owned(),
+            discord_id: split[2].parse().wrap_err("Discord ID is not valid")?,
             check_level,
             check_successful: Arc::new(AtomicBool::new(false)),
         };
@@ -520,7 +541,7 @@ mod tests {
 henry — hrovnyak.gitlab.io — 123 — None
 kian — kasad.com — 456 — NonE
 cynthia — https://clementine.viridian.page — 789 — nONE
-??? — ws://refuse-the-r.ing — bruh — none
+??? — ws://refuse-the-r.ing — 293847 — none
 ",
         )
         .await
@@ -531,6 +552,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             members_file.path().to_owned(),
             static_dir.path().to_owned(),
             Uri::from_static("https://ring.purduehackers.com"),
+            None,
         )
         .await
         .unwrap();
@@ -550,28 +572,28 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                 Member {
                     name: "henry".to_owned(),
                     website: Arc::new(Uri::from_static("hrovnyak.gitlab.io")),
-                    discord_id: "123".to_owned(),
+                    discord_id: "123".parse().unwrap(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
                 Member {
                     name: "kian".to_owned(),
                     website: Arc::new(Uri::from_static("kasad.com")),
-                    discord_id: "456".to_owned(),
+                    discord_id: "456".parse().unwrap(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
                 Member {
                     name: "cynthia".to_owned(),
                     website: Arc::new(Uri::from_static("https://clementine.viridian.page")),
-                    discord_id: "789".to_owned(),
+                    discord_id: "789".parse().unwrap(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
                 Member {
                     name: "???".to_owned(),
                     website: Arc::new(Uri::from_static("ws://refuse-the-r.ing")),
-                    discord_id: "bruh".to_owned(),
+                    discord_id: "293847".parse().unwrap(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
@@ -661,8 +683,8 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             "
 cynthia — https://clementine.viridian.page — 789 — nONE
 henry — hrovnyak.gitlab.io — 123 — None
-??? — http://refuse-the-r.ing — bruh — none
-arhan — arhan.sh — qter — none
+??? — http://refuse-the-r.ing — 293847 — none
+arhan — arhan.sh — 0 — none
 kian — kasad.com — 456 — NonE
 ",
         )
@@ -749,6 +771,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE";
                 members_file.clone(),
                 static_dir,
                 Uri::from_static("https://ring.purduehackers.com"),
+                None,
             )
             .await
             .unwrap(),

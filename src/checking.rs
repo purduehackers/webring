@@ -2,10 +2,10 @@ use std::{error::Error, fmt::Display, io::ErrorKind};
 
 use axum::http::{Uri, uri::Scheme};
 use chrono::Utc;
-use eyre::Report;
 use futures::TryStreamExt;
 use log::{error, info};
 use quick_xml::{Reader, events::Event};
+use reqwest::StatusCode;
 use tokio::sync::RwLock;
 use tokio_util::io::StreamReader;
 
@@ -59,19 +59,22 @@ async fn is_online() -> bool {
     ping_info.1
 }
 
-/// Checks whether a given URL passes the given check level and sends off discord messages if not.
+/// Checks whether a given URL passes the given check level.
 ///
-/// Returns Some with the result, or None if the server seems to be not connected to the internet.
-#[allow(clippy::unused_async)]
-pub async fn check(website: &Uri, check_level: CheckLevel, base_address: Uri) -> Option<bool> {
+/// Returns `Some` with the failure details if the site
+pub async fn check(
+    website: &Uri,
+    check_level: CheckLevel,
+    base_address: Uri,
+) -> Option<CheckFailure> {
     match check_impl(website, check_level, base_address).await {
-        Ok(()) => Some(true),
-        Err(e) => {
+        None => None,
+        Some(failure) => {
             // TODO: Discord
 
             if is_online().await {
-                info!("{website} failed a check: {e}");
-                Some(false)
+                info!("{website} failed a check: {failure}");
+                Some(failure)
             } else {
                 error!("Server side connectivity issue detected!");
                 None
@@ -80,37 +83,69 @@ pub async fn check(website: &Uri, check_level: CheckLevel, base_address: Uri) ->
     }
 }
 
-async fn check_impl(website: &Uri, check_level: CheckLevel, base_address: Uri) -> eyre::Result<()> {
-    match check_level {
-        CheckLevel::ForLinks => {
-            let res = reqwest::get(website.to_string())
-                .await?
-                .error_for_status()?;
-            server_definitely_online().await;
+async fn check_impl(
+    website: &Uri,
+    check_level: CheckLevel,
+    base_address: Uri,
+) -> Option<CheckFailure> {
+    if check_level == CheckLevel::None {
+        return None;
+    }
 
-            // Stream the body instead of collecting it into memory
-            let stream = res.bytes_stream();
+    let response = match reqwest::get(website.to_string()).await {
+        Ok(response) => response,
+        Err(err) => return Some(CheckFailure::Connection(err)),
+    };
+    let successful_response = match response.error_for_status() {
+        Ok(r) => r,
+        Err(err) => return Some(CheckFailure::ResponseStatus(err.status().unwrap())),
+    };
+    server_definitely_online().await;
 
-            // Adapt the stream type returned by reqwest to the type expected by quick_xml
-            match contains_link(
-                StreamReader::new(stream.map_err(|e| std::io::Error::new(ErrorKind::Other, e))),
-                base_address,
-            )
-            .await
-            {
-                None => Ok(()),
-                Some(links) => Err(Report::new(links)),
+    if check_level == CheckLevel::ForLinks {
+        let stream = successful_response.bytes_stream();
+
+        return contains_link(
+            StreamReader::new(stream.map_err(|e| std::io::Error::new(ErrorKind::Other, e))),
+            base_address,
+        )
+        .await
+        .map(CheckFailure::MissingLinks);
+    }
+
+    None
+}
+
+/// Represents a failed result of a validation check
+#[derive(Debug)]
+pub enum CheckFailure {
+    /// Failed to connect to the server
+    Connection(reqwest::Error),
+    /// Site returned a non-2xx response
+    ResponseStatus(StatusCode),
+    /// Site returned a successful response but is missing the expected links
+    MissingLinks(MissingLinks),
+}
+
+impl Display for CheckFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            CheckFailure::Connection(err) => write!(f, "Connection to your site failed: {err}")?,
+            CheckFailure::ResponseStatus(status_code) => {
+                write!(
+                    f,
+                    "Your site returned an error response: {}",
+                    status_code.as_u16()
+                )?;
+                if let Some(description) = status_code.canonical_reason() {
+                    write!(f, " ({description})")?;
+                }
+            }
+            CheckFailure::MissingLinks(missing_links) => {
+                missing_links.fmt(f)?;
             }
         }
-        CheckLevel::JustOnline => {
-            reqwest::get(website.to_string())
-                .await?
-                .error_for_status()?;
-            server_definitely_online().await;
-
-            Ok(())
-        }
-        CheckLevel::None => Ok(()),
+        Ok(())
     }
 }
 
@@ -149,7 +184,7 @@ impl MissingLinks {
 impl Display for MissingLinks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let address = &self.base_address;
-        writeln!(f, "Your webpage is missing the following links:")?;
+        writeln!(f, "Your site is missing the following links:")?;
         if self.home {
             writeln!(f, "- {address}")?;
         }
@@ -165,7 +200,7 @@ impl Display for MissingLinks {
             "\nWhat to do:
 - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
 - If you don't use anchor tags for the links, add the attribute `data-phwebring=\"prev\"|\"home\"|\"next\"` to the link elements.
-- If you think this alert is in error, contact Henry."
+- If you think this alert is in error, send a message in #webring."
         )
     }
 }

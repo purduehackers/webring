@@ -11,12 +11,15 @@ use std::{
 
 use axum::http::{Uri, uri::Scheme};
 use clap::{Parser, ValueEnum};
+use discord::DiscordNotifier;
 use ftail::Ftail;
 use log::LevelFilter;
+use reqwest::Url;
 use routes::create_router;
 use webring::Webring;
 
 mod checking;
+mod discord;
 mod homepage;
 mod routes;
 mod webring;
@@ -57,6 +60,10 @@ struct CliOptions {
 
     #[arg(short = 'a', long, default_value = "https://ring.purduehackers.com", value_parser = parse_uri)]
     address: Uri,
+
+    /// Discord webhook URL
+    #[arg(long)]
+    discord_webhook_url: Option<Url>,
 }
 
 fn parse_uri(str: &str) -> eyre::Result<Uri> {
@@ -140,11 +147,15 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Create Discord notifier
+    let maybe_notifier = cli.discord_webhook_url.as_ref().map(DiscordNotifier::new);
+
     // Create webring data structure
     let webring = match Webring::new(
         cli.members_file.clone(),
         cli.static_dir.clone(),
         cli.address.clone(),
+        maybe_notifier,
     )
     .await
     {
