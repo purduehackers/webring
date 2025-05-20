@@ -286,26 +286,18 @@ impl Webring {
     /// After calling this method, the `Webring`'s data will automatically be reloaded when the
     /// members file is changed. Similarly, the homepage will be invalidated when the template file
     /// is changed.
+    ///
+    /// This function must be called from a tokio runtime.
     pub fn enable_reloading(self: &Arc<Self>) -> eyre::Result<()> {
-        /// Represents which change we observed
-        enum UpdateKind {
-            Webring,
-            Homepage,
-        }
-
+        let rt = tokio::runtime::Handle::current();
         let homepage_template_path = self.static_dir_path.join("index.html");
-        // We need to use a channel to send events, because notify runs the watcher in its own thread
-        // which is not part of the tokio runtime. So we can't run `webring.update_from_file()` in the
-        // closure because that is async and requires an async runtime. Thus we use the channel to
-        // notify an async task that the file should be reloaded.
-        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
-        let self_for_closure = Arc::downgrade(self);
+        let weak_webring = Arc::downgrade(self);
         let homepage_template_path_for_closure = homepage_template_path.clone();
         let mut watcher =
             notify::recommended_watcher(move |maybe_event: notify::Result<notify::Event>| {
                 // We can upgrade because if the webring was dropped, this watcher would be
                 // deregistered and thus we wouldn't be here.
-                let webring = self_for_closure.upgrade().unwrap();
+                let webring = weak_webring.upgrade().unwrap();
                 match maybe_event {
                     Ok(event) => {
                         debug!(
@@ -327,7 +319,13 @@ impl Webring {
                                     "Detected change to {}. Reloading webring.",
                                     webring.members_file_path.display()
                                 );
-                                tx.blocking_send(UpdateKind::Webring).unwrap();
+                                let webring_for_task = Arc::clone(&webring);
+                                rt.spawn(async move {
+                                    if let Err(err) = webring_for_task.update_from_file().await {
+                                        error!("Failed to update webring: {err}");
+                                    }
+                                    info!("Webring reloaded");
+                                });
                             }
                             if same_file::is_same_file(&path, &homepage_template_path_for_closure)
                                 .unwrap_or_else(|err| {
@@ -339,7 +337,10 @@ impl Webring {
                                     "Detected change to {}. Invalidating homepage.",
                                     homepage_template_path_for_closure.display()
                                 );
-                                tx.blocking_send(UpdateKind::Homepage).unwrap();
+                                let webring_for_task = Arc::clone(&webring);
+                                rt.spawn(async move {
+                                    webring_for_task.homepage.write().await.take();
+                                });
                             }
                         }
                     }
@@ -348,24 +349,6 @@ impl Webring {
                     }
                 }
             })?;
-        let self_for_task = Arc::downgrade(self);
-        tokio::spawn(async move {
-            while let Some(update_kind) = rx.recv().await {
-                // We can upgrade because as long as there is a sender, the webring exists
-                let webring = self_for_task.upgrade().unwrap();
-                match update_kind {
-                    UpdateKind::Webring => {
-                        if let Err(err) = webring.update_from_file().await {
-                            error!("Failed to update webring: {err}");
-                        }
-                        info!("Webring reloaded");
-                    }
-                    UpdateKind::Homepage => {
-                        *webring.homepage.write().await = None;
-                    }
-                }
-            }
-        });
         watcher.watch(&self.members_file_path, RecursiveMode::NonRecursive)?;
         watcher.watch(&homepage_template_path, RecursiveMode::NonRecursive)?;
         let _ = self.file_watcher.set(watcher);
