@@ -144,7 +144,7 @@ impl MissingLinks {
         match path {
             "" => self.home = false,
             "next" => self.next = false,
-            "prev" => self.prev = false,
+            "prev" | "previous" => self.prev = false,
             _ => {}
         }
     }
@@ -226,7 +226,7 @@ async fn contains_link(webpage: impl tokio::io::AsyncBufRead + Unpin) -> Option<
 
                 // If the value matches any of these, mark the link as found.
                 match &*attr_value {
-                    "prev" => missing_links.prev = false,
+                    "prev" | "previous" => missing_links.prev = false,
                     "home" => missing_links.home = false,
                     "next" => missing_links.next = false,
                     _ => {}
@@ -284,6 +284,17 @@ mod tests {
         assert_links_gives(
             "<carousel>
                 <a href=\"ADDRESS/prev?query=huh\"></a>
+            </carousel>",
+            (true, false, true),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn just_previous() {
+        assert_links_gives(
+            "<carousel>
+                <a href=\"ADDRESS/previous?query=huh\"></a>
             </carousel>",
             (true, false, true),
         )
@@ -352,6 +363,17 @@ mod tests {
         assert_links_gives(
             "<body>
                 <b data-phwebring=\"prev\"></b>
+            </body>",
+            (true, false, true),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn alternate_elements_just_previous() {
+        assert_links_gives(
+            "<body>
+                <b data-phwebring=\"previous\"></b>
             </body>",
             (true, false, true),
         )
