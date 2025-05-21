@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    net::IpAddr,
     path::{Path, PathBuf},
     sync::{
         Arc, OnceLock, RwLock, RwLockReadGuard,
@@ -161,7 +162,7 @@ impl Webring {
     fn member_idx_and_lock(
         &self,
         uri: &Uri,
-    ) -> Result<(usize, RwLockReadGuard<'_, WebringData>), TraverseWebringError> {
+    ) -> Result<(usize, Intern<str>, RwLockReadGuard<'_, WebringData>), TraverseWebringError> {
         let authority = uri
             .authority()
             .ok_or_else(|| TraverseWebringError::NoAuthority(uri.to_owned()))?;
@@ -173,13 +174,14 @@ impl Webring {
                 .members_table
                 .get(&interned)
                 .ok_or_else(|| TraverseWebringError::AuthorityNotFound(authority.to_owned()))?,
+            interned,
             inner,
         ))
     }
 
     /// Get the next page in the webring from the given URI based on the authority part
-    pub fn next_page(&self, uri: &Uri) -> Result<Intern<Uri>, TraverseWebringError> {
-        let (mut idx, inner) = self.member_idx_and_lock(uri)?;
+    pub fn next_page(&self, uri: &Uri, ip: IpAddr) -> Result<Intern<Uri>, TraverseWebringError> {
+        let (mut idx, authority, inner) = self.member_idx_and_lock(uri)?;
 
         // -1 to avoid jumping all the way around the ring to the same page
         for _ in 0..inner.ordering.len() - 1 {
@@ -189,6 +191,8 @@ impl Webring {
             }
 
             if inner.ordering[idx].check_successful.load(Ordering::Relaxed) {
+                self.stats
+                    .redirected(ip, authority, inner.ordering[idx].authority);
                 return Ok(inner.ordering[idx].website);
             }
         }
@@ -199,8 +203,8 @@ impl Webring {
     }
 
     /// Get the previous page in the webring from the given URI; based on the authority part
-    pub fn prev_page(&self, uri: &Uri) -> Result<Intern<Uri>, TraverseWebringError> {
-        let (mut idx, inner) = self.member_idx_and_lock(uri)?;
+    pub fn prev_page(&self, uri: &Uri, ip: IpAddr) -> Result<Intern<Uri>, TraverseWebringError> {
+        let (mut idx, authority, inner) = self.member_idx_and_lock(uri)?;
 
         // -1 to avoid jumping all the way around the ring to the same page
         for _ in 0..inner.ordering.len() - 1 {
@@ -210,6 +214,8 @@ impl Webring {
             idx -= 1;
 
             if inner.ordering[idx].check_successful.load(Ordering::Relaxed) {
+                self.stats
+                    .redirected(ip, authority, inner.ordering[idx].authority);
                 return Ok(inner.ordering[idx].website);
             }
         }
@@ -227,11 +233,12 @@ impl Webring {
     pub fn random_page(
         &self,
         maybe_origin: Option<&Uri>,
+        ip: IpAddr,
     ) -> Result<Intern<Uri>, TraverseWebringError> {
-        let (maybe_idx, inner) =
+        let (maybe_idx, maybe_authority, inner) =
             match maybe_origin.and_then(|origin| self.member_idx_and_lock(origin).ok()) {
-                Some((idx, inner)) => (Some(idx), inner),
-                None => (None, self.inner.read().unwrap()),
+                Some((idx, authority, inner)) => (Some(idx), Some(authority), inner),
+                None => (None, None, self.inner.read().unwrap()),
             };
 
         let mut range = (0..inner.ordering.len()).collect::<Vec<_>>();
@@ -248,6 +255,11 @@ impl Webring {
                     .check_successful
                     .load(Ordering::Relaxed)
             {
+                if let Some(authority) = maybe_authority {
+                    self.stats
+                        .redirected(ip, authority, inner.ordering[chosen].authority);
+                }
+
                 return Ok(inner.ordering[chosen].website);
             }
 
@@ -501,7 +513,7 @@ mod tests {
             prev: Result<&'static str, TraverseWebringError>,
         ) {
             assert_eq!(
-                self.prev_page(&Uri::from_static(addr)),
+                self.prev_page(&Uri::from_static(addr), "0.0.0.0".parse().unwrap()),
                 prev.map(|v| Intern::new(Uri::from_static(v)))
             );
         }
@@ -512,7 +524,7 @@ mod tests {
             next: Result<&'static str, TraverseWebringError>,
         ) {
             assert_eq!(
-                self.next_page(&Uri::from_static(addr)),
+                self.next_page(&Uri::from_static(addr), "0.0.0.0".parse().unwrap()),
                 next.map(|v| Intern::new(Uri::from_static(v)))
             );
         }
@@ -638,7 +650,12 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         // Test random with a specified origin matching a site
         let origin = Uri::from_static("ws://refuse-the-r.ing");
         for _ in 0..200 {
-            found_in_random.insert((*webring.random_page(Some(&origin)).unwrap()).clone());
+            found_in_random.insert(
+                (*webring
+                    .random_page(Some(&origin), "0.0.0.0".parse().unwrap())
+                    .unwrap())
+                .clone(),
+            );
         }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
@@ -648,7 +665,12 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         // Test random without a specified origin
         found_in_random.clear();
         for _ in 0..200 {
-            found_in_random.insert((*webring.random_page(None).unwrap()).clone());
+            found_in_random.insert(
+                (*webring
+                    .random_page(None, "0.0.0.0".parse().unwrap())
+                    .unwrap())
+                .clone(),
+            );
         }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
@@ -660,7 +682,12 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         let origin = Uri::from_static("https://ring.purduehackers.com");
         found_in_random.clear();
         for _ in 0..200 {
-            found_in_random.insert((*webring.random_page(Some(&origin)).unwrap()).clone());
+            found_in_random.insert(
+                (*webring
+                    .random_page(Some(&origin), "0.0.0.0".parse().unwrap())
+                    .unwrap())
+                .clone(),
+            );
         }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
@@ -701,7 +728,7 @@ kian — kasad.com — 456 — NonE
             Err(TraverseWebringError::AllMembersFailing),
         );
         assert_eq!(
-            webring.random_page(None),
+            webring.random_page(None, "0.0.0.0".parse().unwrap()),
             Err(TraverseWebringError::AllMembersFailing)
         );
         webring.assert_prev(
@@ -715,7 +742,7 @@ kian — kasad.com — 456 — NonE
 
         for _ in 0..200 {
             assert_eq!(
-                webring.random_page(None),
+                webring.random_page(None, "0.0.0.0".parse().unwrap()),
                 Ok(Intern::new(Uri::from_static("arhan.sh")))
             );
         }

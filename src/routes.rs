@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     error::Error,
     fmt::{Display, Write},
+    net::SocketAddr,
     str::FromStr,
     sync::{Arc, LazyLock},
 };
@@ -11,7 +12,7 @@ use std::{
 use axum::{
     Router,
     body::Body,
-    extract::{Query, Request, State},
+    extract::{ConnectInfo, Query, Request, State},
     handler::HandlerWithoutStateExt,
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, uri::InvalidUri},
     response::{Html, IntoResponse, NoContent, Redirect, Response},
@@ -100,9 +101,10 @@ async fn serve_next(
     State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<Response, RouteError> {
     let origin = get_origin_from_request(headers, params)?;
-    let page = webring.next_page(&origin)?;
+    let page = webring.next_page(&origin, addr.ip())?;
     Ok((
         // Set Vary: Referer so browsers will not cache responses for requests with different origins
         [(
@@ -126,9 +128,10 @@ async fn serve_previous(
     State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<Response, RouteError> {
     let origin = get_origin_from_request(headers, params)?;
-    let page = webring.prev_page(&origin)?;
+    let page = webring.prev_page(&origin, addr.ip())?;
     Ok((
         // Set Vary: Referer so browsers will not cache responses for requests with different origins
         [(
@@ -152,9 +155,10 @@ async fn serve_random(
     State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<Response, RouteError> {
     let maybe_origin = get_origin_from_request(headers, params).ok();
-    let page = webring.random_page(maybe_origin.as_ref())?;
+    let page = webring.random_page(maybe_origin.as_ref(), addr.ip())?;
     Ok((
         // Don't cache since this response can change for every request
         [(

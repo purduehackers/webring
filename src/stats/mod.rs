@@ -27,19 +27,10 @@ struct AggregatedStats {
     counters: HashMap<(NaiveDate, Intern<str>, Intern<str>, Intern<str>), AtomicU64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Stats {
     aggregated: AggregatedStats,
     ip_tracking: HashMap<IpAddr, IpInfo>,
-}
-
-impl Default for Stats {
-    fn default() -> Self {
-        Self {
-            aggregated: AggregatedStats::default(),
-            ip_tracking: HashMap::default(),
-        }
-    }
 }
 
 impl Stats {
