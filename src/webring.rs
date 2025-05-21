@@ -35,12 +35,12 @@ impl FromStr for CheckLevel {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s.to_lowercase().as_str() {
-            "for links" => CheckLevel::ForLinks,
-            "just online" => CheckLevel::JustOnline,
+            "links" => CheckLevel::ForLinks,
+            "online" => CheckLevel::JustOnline,
             "none" => CheckLevel::None,
             _ => {
                 bail!(
-                    "Expected the check level to be one of {{\"for links\", \"just online\", \"none\"}}. Got \"{s}\""
+                    "Expected the check level to be one of {{\"links\", \"online\", \"none\"}}. Got \"{s}\""
                 );
             }
         })
