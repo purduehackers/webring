@@ -255,10 +255,11 @@ impl Webring {
                     .check_successful
                     .load(Ordering::Relaxed)
             {
-                if let Some(authority) = maybe_authority {
-                    self.stats
-                        .redirected(ip, authority, inner.ordering[chosen].authority);
-                }
+                self.stats.redirected(
+                    ip,
+                    maybe_authority.unwrap_or_else(|| Intern::from_ref("unknown")),
+                    inner.ordering[chosen].authority,
+                );
 
                 return Ok(inner.ordering[chosen].website);
             }

@@ -75,18 +75,20 @@ impl Stats {
     fn prune_seen_ips_impl(&self, now: DateTime<Utc>) {
         self.ip_tracking
             .pin()
-            .retain(|_ip_addr, info| now - info.last_seen > IP_TRACKING_TTL);
+            .retain(|_ip_addr, info| now - info.last_seen < IP_TRACKING_TTL);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::net::IpAddr;
+    use std::{net::IpAddr, sync::atomic::Ordering};
 
-    use chrono::{DateTime, Utc};
+    use chrono::{DateTime, Duration, NaiveDate, Utc};
     use sarlacc::Intern;
 
-    use super::Stats;
+    use crate::stats::IP_TRACKING_TTL;
+
+    use super::{Stats, TIMEZONE};
 
     fn a(addr: &str) -> IpAddr {
         addr.parse().unwrap()
@@ -100,6 +102,21 @@ mod tests {
         DateTime::from_timestamp_millis(timestamp * 1000).unwrap()
     }
 
+    fn d(timestamp: i64) -> NaiveDate {
+        t(timestamp).with_timezone(&TIMEZONE).date_naive()
+    }
+
+    impl Stats {
+        fn g(&self, timestamp: i64, from: &str, to: &str, started_from: &str) -> u64 {
+            self.aggregated
+                .counters
+                .pin()
+                .get(&(d(timestamp), i(from), i(to), i(started_from)))
+                .unwrap()
+                .load(Ordering::Relaxed)
+        }
+    }
+
     #[tokio::test]
     async fn test_stat_tracking() {
         let stats = Stats::new();
@@ -107,8 +124,58 @@ mod tests {
         stats.redirected_impl(a("0.0.0.0"), i("a.com"), i("b.com"), t(0));
         stats.redirected_impl(a("0.0.0.0"), i("b.com"), i("c.com"), t(1));
 
-        stats.redirected_impl(a("1.0.0.0"), i("b.com"), i("c.com"), t(0));
-        stats.redirected_impl(a("1.0.0.0"), i("c.com"), i("b.com"), t(1));
-        stats.redirected_impl(a("1.0.0.0"), i("b.com"), i("a.com"), t(2));
+        stats.redirected_impl(a("1.0.0.0"), i("a.com"), i("b.com"), t(1));
+        stats.redirected_impl(a("1.0.0.0"), i("b.com"), i("homepage.com"), t(2));
+        stats.redirected_impl(a("1.0.0.0"), i("homepage.com"), i("c.com"), t(3));
+
+        assert_eq!(stats.aggregated.counters.len(), 4);
+        assert_eq!(stats.g(0, "a.com", "b.com", "a.com"), 2);
+        assert_eq!(stats.g(0, "b.com", "c.com", "a.com"), 1);
+        assert_eq!(stats.g(0, "b.com", "homepage.com", "a.com"), 1);
+        assert_eq!(stats.g(0, "homepage.com", "c.com", "a.com"), 1);
+
+        let tracking = stats.ip_tracking.pin();
+        assert_eq!(tracking.len(), 2);
+
+        let zero = tracking.get(&a("0.0.0.0")).unwrap();
+        assert_eq!(zero.last_seen, t(1));
+        assert_eq!(zero.started_from, i("a.com"));
+
+        let one = tracking.get(&a("1.0.0.0")).unwrap();
+        assert_eq!(one.last_seen, t(3));
+        assert_eq!(one.started_from, i("a.com"));
+
+        stats.prune_seen_ips_impl(t(1000));
+
+        assert_eq!(tracking.len(), 2);
+
+        let zero = tracking.get(&a("0.0.0.0")).unwrap();
+        assert_eq!(zero.last_seen, t(1));
+        assert_eq!(zero.started_from, i("a.com"));
+
+        let one = tracking.get(&a("1.0.0.0")).unwrap();
+        assert_eq!(one.last_seen, t(3));
+        assert_eq!(one.started_from, i("a.com"));
+
+        stats.prune_seen_ips_impl(t(1) + IP_TRACKING_TTL);
+
+        assert_eq!(tracking.len(), 1);
+
+        let one = tracking.get(&a("1.0.0.0")).unwrap();
+        assert_eq!(one.last_seen, t(3));
+        assert_eq!(one.started_from, i("a.com"));
+
+        let day = Duration::days(1);
+
+        stats.redirected_impl(a("0.0.0.0"), i("b.com"), i("c.com"), t(1) + day);
+        stats.redirected_impl(a("0.0.0.0"), i("c.com"), i("a.com"), t(2) + day);
+
+        assert_eq!(stats.aggregated.counters.len(), 6);
+        assert_eq!(stats.g(0, "a.com", "b.com", "a.com"), 2);
+        assert_eq!(stats.g(0, "b.com", "c.com", "a.com"), 1);
+        assert_eq!(stats.g(0, "b.com", "homepage.com", "a.com"), 1);
+        assert_eq!(stats.g(0, "homepage.com", "c.com", "a.com"), 1);
+        assert_eq!(stats.g(day.num_seconds(), "b.com", "c.com", "b.com"), 1);
+        assert_eq!(stats.g(day.num_seconds(), "c.com", "a.com", "b.com"), 1);
     }
 }
