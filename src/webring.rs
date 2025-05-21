@@ -23,11 +23,11 @@ use crate::{
     homepage::{Homepage, MemberForHomepage},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CheckLevel {
-    ForLinks,
-    JustOnline,
     None,
+    JustOnline,
+    ForLinks,
 }
 
 impl FromStr for CheckLevel {
