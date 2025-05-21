@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::{
         Arc, OnceLock, RwLock, RwLockReadGuard,
         atomic::{AtomicBool, Ordering},
@@ -8,7 +9,7 @@ use std::{
 };
 
 use axum::http::{Uri, uri::Authority};
-use eyre::{Context, eyre};
+use eyre::{Context, bail, eyre};
 use futures::{StreamExt, stream::FuturesUnordered};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rand::seq::SliceRandom;
@@ -27,6 +28,23 @@ pub enum CheckLevel {
     ForLinks,
     JustOnline,
     None,
+}
+
+impl FromStr for CheckLevel {
+    type Err = eyre::Report;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
+            "for links" => CheckLevel::ForLinks,
+            "just online" => CheckLevel::JustOnline,
+            "none" => CheckLevel::None,
+            _ => {
+                bail!(
+                    "Expected the check level to be one of {{\"for links\", \"just online\", \"none\"}}. Got \"{s}\""
+                );
+            }
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -433,17 +451,7 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
             ));
         }
 
-        #[allow(clippy::match_on_vec_items)]
-        let check_level = match &*split[3].to_lowercase() {
-            "for links" => CheckLevel::ForLinks,
-            "just online" => CheckLevel::JustOnline,
-            "none" => CheckLevel::None,
-            _ => {
-                return Err(eyre!(
-                    "Expected the check level to be one of {{\"for links\", \"just online\", \"none\"}}. Got:\n\n{line}"
-                ));
-            }
-        };
+        let check_level = CheckLevel::from_str(split[3])?;
 
         let uri = split[1].parse::<Uri>()?;
 
