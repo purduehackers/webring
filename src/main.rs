@@ -7,6 +7,7 @@ use std::{
     path::PathBuf,
     process::ExitCode,
     sync::Arc,
+    time::Duration,
 };
 
 use axum::http::{Uri, uri::Scheme};
@@ -165,6 +166,18 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // Perform site checks every 5 minutes
+    {
+        const SITE_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 5);
+        let webring_for_task = Arc::clone(&webring);
+        tokio::spawn(async move {
+            if let Err(err) = webring_for_task.check_members().await {
+                log::error!("Failed to check members: {err}");
+            }
+            tokio::time::sleep(SITE_CHECK_INTERVAL).await;
+        });
+    }
 
     // Create member file watcher
     if let Err(err) = webring.enable_reloading() {
