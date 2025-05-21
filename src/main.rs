@@ -59,10 +59,6 @@ struct CliOptions {
 
     #[arg(short = 'a', long, default_value = "https://ring.purduehackers.com", value_parser = parse_uri)]
     address: Intern<Uri>,
-
-    /// File to write statistics to
-    #[arg(short, long)]
-    stats_file: PathBuf,
 }
 
 fn parse_uri(str: &str) -> eyre::Result<Intern<Uri>> {
@@ -149,7 +145,6 @@ async fn main() -> ExitCode {
     // Create webring data structure
     let webring = match Webring::new(
         cli.members_file.clone(),
-        cli.stats_file.clone(),
         cli.static_dir.clone(),
         cli.address,
     )
