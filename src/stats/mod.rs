@@ -8,6 +8,7 @@ use std::{
 };
 
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, Utc};
+use log::info;
 use papaya::HashMap;
 use sarlacc::Intern;
 
@@ -72,10 +73,14 @@ impl Stats {
         self.prune_seen_ips_impl(Utc::now());
     }
 
+    #[expect(clippy::cast_possible_wrap)]
     fn prune_seen_ips_impl(&self, now: DateTime<Utc>) {
-        self.ip_tracking
-            .pin()
-            .retain(|_ip_addr, info| now - info.last_seen < IP_TRACKING_TTL);
+        let mut ip_tracking = self.ip_tracking.pin();
+        // Since papaya is lock-free it may be possible for things to be inserted in between these before/after calls so the number may not be exact. Too bad!
+        let before = ip_tracking.len();
+        ip_tracking.retain(|_ip_addr, info| now - info.last_seen < IP_TRACKING_TTL);
+        let after = ip_tracking.len();
+        info!("Pruned ~{} IP addresses", after as i64 - before as i64);
     }
 }
 
