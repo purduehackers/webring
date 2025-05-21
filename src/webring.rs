@@ -157,15 +157,19 @@ impl Webring {
 
     /// Query everyone's webpages and check them according to their respective check levels.
     pub async fn check_members(&self) -> eyre::Result<()> {
-        let tasks = FuturesUnordered::new();
-
-        {
-            let inner = self.inner.read().unwrap();
-
-            for member in &inner.ordering {
-                tasks.push(member.check_and_store_and_optionally_notify(&self.base_address, None));
-            }
-        }
+        let tasks = self
+            .inner
+            .read()
+            .unwrap()
+            .ordering
+            .iter()
+            .map(|member| {
+                member.check_and_store_and_optionally_notify(
+                    &self.base_address,
+                    self.notifier.as_ref().map(Arc::clone),
+                )
+            })
+            .collect::<FuturesUnordered<_>>();
 
         let ret = collect_errs(tasks).await;
 
