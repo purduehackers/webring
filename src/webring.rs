@@ -112,6 +112,9 @@ pub struct Webring {
 
 impl Webring {
     /// Create a webring by parsing the file at the given path.
+    ///
+    /// The members' `check_successful` fields will be initialized to `true` until a check is
+    /// performed using [`check_members()`][Self::check_members].
     pub async fn new(
         members_file: PathBuf,
         static_dir: PathBuf,
@@ -120,7 +123,7 @@ impl Webring {
     ) -> eyre::Result<Webring> {
         let webring_data = parse_file(&members_file).await?;
 
-        let webring = Webring {
+        Ok(Webring {
             inner: RwLock::new(webring_data),
             members_file_path: members_file,
             static_dir_path: static_dir,
@@ -128,11 +131,7 @@ impl Webring {
             file_watcher: OnceLock::default(),
             base_address,
             notifier: notifier.map(Arc::new),
-        };
-
-        webring.check_members().await?;
-
-        Ok(webring)
+        })
     }
 
     /// Update the webring in-place by re-parsing the file given in the original `new` call, and invalidating the cache of the SSR'ed homepage.
@@ -468,7 +467,7 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
                 id => Some(id.parse().wrap_err("Discord ID is not valid")?),
             },
             check_level,
-            check_successful: Arc::new(AtomicBool::new(false)),
+            check_successful: Arc::new(AtomicBool::new(true)),
         };
 
         members
@@ -503,8 +502,14 @@ mod tests {
         time::Duration,
     };
 
-    use axum::http::{Uri, uri::Authority};
+    use axum::{
+        Router,
+        http::{Uri, uri::Authority},
+        response::Html,
+        routing::get,
+    };
     use pretty_assertions::assert_eq;
+    use reqwest::StatusCode;
     use tempfile::{NamedTempFile, TempDir};
 
     use crate::webring::{CheckLevel, Webring};
@@ -843,5 +848,107 @@ kian — kasad.com — 123 — none";
         webring.enable_reloading().unwrap();
         drop(webring);
         assert!(weak_ptr.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_checks() {
+        // Start a web server so we can do each kinds of checks
+        let server_addr = ("127.0.0.1", 32750);
+        tokio::spawn(async move {
+            let listener = tokio::net::TcpListener::bind(&server_addr).await.unwrap();
+            let router: Router<()> = Router::new()
+                .route("/up", get(async || "Hi there!"))
+                .route(
+                    "/links",
+                    get(async || {
+                        Html(
+                            r#"
+                        <a href="https://ring.purduehackers.com/">Purdue Hackers webring</a>
+                        <a href="https://ring.purduehackers.com/prev">Previous site</a>
+                        <a href="https://ring.purduehackers.com/next">Next site</a>
+                        "#,
+                        )
+                    }),
+                )
+                .route(
+                    "/error",
+                    get(async || {
+                        let status = StatusCode::from_u16(rand::random_range(400..600)).unwrap();
+                        (status, "Uh oh :(")
+                    }),
+                );
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        // Create a site for each endpoint, plus one which will fail to connect.
+        // The second value in the tuple is the list of checks for which this member should succeed.
+        let sites = [
+            (
+                Member {
+                    name: "Connection Error".to_owned(),
+                    website: Uri::from_static("http://127.0.0.10:0/links").into(),
+                    discord_id: None,
+                    check_level: CheckLevel::None,
+                    check_successful: AtomicBool::new(true).into(),
+                },
+                vec![CheckLevel::None],
+            ),
+            (
+                Member {
+                    name: "HTTP Error".to_owned(),
+                    website: Uri::from_static("http://127.0.0.1:32750/error").into(),
+                    discord_id: None,
+                    check_level: CheckLevel::None,
+                    check_successful: AtomicBool::new(true).into(),
+                },
+                vec![CheckLevel::None],
+            ),
+            (
+                Member {
+                    name: "Up".to_owned(),
+                    website: Uri::from_static("http://127.0.0.1:32750/up").into(),
+                    discord_id: None,
+                    check_level: CheckLevel::None,
+                    check_successful: AtomicBool::new(true).into(),
+                },
+                vec![CheckLevel::None, CheckLevel::JustOnline],
+            ),
+            (
+                Member {
+                    name: "Links".to_owned(),
+                    website: Uri::from_static("http://127.0.0.1:32750/links").into(),
+                    discord_id: None,
+                    check_level: CheckLevel::None,
+                    check_successful: AtomicBool::new(true).into(),
+                },
+                vec![
+                    CheckLevel::None,
+                    CheckLevel::JustOnline,
+                    CheckLevel::ForLinks,
+                ],
+            ),
+        ];
+
+        let base = Uri::from_static("https://ring.purduehackers.com");
+        for (mut member, expect_passing) in sites {
+            let levels = [
+                CheckLevel::None,
+                CheckLevel::JustOnline,
+                CheckLevel::ForLinks,
+            ];
+            for level in levels {
+                // FIXME: Collect CheckFailure and check type
+                member.check_level = level;
+                member
+                    .check_and_store_and_optionally_notify(&base, None)
+                    .await
+                    .unwrap();
+                eprintln!("Checking {} at level {:?}", &member.name, level);
+                assert_eq!(
+                    expect_passing.contains(&level),
+                    member.check_successful.load(Ordering::Relaxed)
+                );
+            }
+        }
     }
 }
