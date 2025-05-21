@@ -10,6 +10,7 @@ use std::{
 };
 
 use axum::http::{Uri, uri::Scheme};
+use chrono::Duration;
 use clap::{Parser, ValueEnum};
 use ftail::Ftail;
 use log::LevelFilter;
@@ -162,6 +163,7 @@ async fn main() -> ExitCode {
         log::error!("Unable to watch member file for changes: {err}");
         log::warn!("Webring will not reload automatically.");
     }
+    webring.enable_ip_pruning(Duration::hours(1));
     log::info!("Watching {} for changes", cli.members_file.display());
 
     // Start server

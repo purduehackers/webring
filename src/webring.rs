@@ -9,6 +9,7 @@ use std::{
 };
 
 use axum::http::{Uri, uri::Authority};
+use chrono::TimeDelta;
 use eyre::eyre;
 use futures::{StreamExt, stream::FuturesUnordered};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -79,7 +80,7 @@ pub struct Webring {
     static_dir_path: PathBuf,
     file_watcher: OnceLock<RecommendedWatcher>,
     base_address: Intern<Uri>,
-    stats: Stats,
+    stats: Arc<Stats>,
 }
 
 impl Webring {
@@ -97,7 +98,7 @@ impl Webring {
             members_file_path: members_file,
             static_dir_path: static_dir,
             homepage: tokio::sync::RwLock::new(None),
-            stats,
+            stats: Arc::new(stats),
             file_watcher: OnceLock::default(),
             base_address,
         };
@@ -383,6 +384,25 @@ impl Webring {
         watcher.watch(&homepage_template_path, RecursiveMode::NonRecursive)?;
         let _ = self.file_watcher.set(watcher);
         Ok(())
+    }
+
+    /// Create a task that prunes IP addresses from the table at the given interval. Note that IPs will be pruned if they haven't been seen since `IP_TRACKING_TTL`.
+    pub fn enable_ip_pruning(&self, interval: TimeDelta) {
+        let stats_for_task = Arc::downgrade(&self.stats);
+        let std_duration = interval.to_std().unwrap();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std_duration).await;
+
+                // If the stats were freed that means the webring was freed and we can go die
+                if let Some(stats) = stats_for_task.upgrade() {
+                    stats.prune_seen_ips();
+                } else {
+                    return;
+                }
+            }
+        });
     }
 }
 
