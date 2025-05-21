@@ -68,7 +68,7 @@ impl Stats {
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn prune_seen_ips(&self) {
+    pub fn prune_seen_ips(&self) {
         self.prune_seen_ips_impl(Utc::now());
     }
 
