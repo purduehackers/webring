@@ -52,7 +52,7 @@ struct Member {
     name: String,
     website: Arc<Uri>,
     #[allow(dead_code)] // FIXME: Remove once Discord integration is implemented
-    discord_id: Snowflake,
+    discord_id: Option<Snowflake>,
     check_level: CheckLevel,
     check_successful: Arc<AtomicBool>,
 }
@@ -72,10 +72,10 @@ impl Member {
         async move {
             if let Some(failure) = check(&website, check_level, &base_address_for_block).await {
                 successful.store(false, Ordering::Relaxed);
-                if let Some(notifier) = notifier {
+                if let (Some(notifier), Some(user_id)) = (notifier, discord_id_for_block) {
                     tokio::spawn(async move {
                         notifier.send_message(
-                            Some(discord_id_for_block),
+                            Some(user_id),
                             &format!("Your site ({website}) failed validation for the following reason:\n{failure}"),
                         ).await.unwrap();
                     });
@@ -463,7 +463,10 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
         let member = Member {
             name: split[0].to_owned(),
             website: Arc::from(uri),
-            discord_id: split[2].parse().wrap_err("Discord ID is not valid")?,
+            discord_id: match split[2] {
+                "-" => None,
+                id => Some(id.parse().wrap_err("Discord ID is not valid")?),
+            },
             check_level,
             check_successful: Arc::new(AtomicBool::new(false)),
         };
@@ -501,6 +504,7 @@ mod tests {
     };
 
     use axum::http::{Uri, uri::Authority};
+    use pretty_assertions::assert_eq;
     use tempfile::{NamedTempFile, TempDir};
 
     use crate::webring::{CheckLevel, Webring};
@@ -552,7 +556,7 @@ mod tests {
 henry — hrovnyak.gitlab.io — 123 — None
 kian — kasad.com — 456 — NonE
 cynthia — https://clementine.viridian.page — 789 — nONE
-??? — ws://refuse-the-r.ing — 293847 — none
+??? — ws://refuse-the-r.ing — - — none
 ",
         )
         .await
@@ -583,28 +587,28 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                 Member {
                     name: "henry".to_owned(),
                     website: Arc::new(Uri::from_static("hrovnyak.gitlab.io")),
-                    discord_id: "123".parse().unwrap(),
+                    discord_id: Some("123".parse().unwrap()),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
                 Member {
                     name: "kian".to_owned(),
                     website: Arc::new(Uri::from_static("kasad.com")),
-                    discord_id: "456".parse().unwrap(),
+                    discord_id: Some("456".parse().unwrap()),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
                 Member {
                     name: "cynthia".to_owned(),
                     website: Arc::new(Uri::from_static("https://clementine.viridian.page")),
-                    discord_id: "789".parse().unwrap(),
+                    discord_id: Some("789".parse().unwrap()),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
                 Member {
                     name: "???".to_owned(),
                     website: Arc::new(Uri::from_static("ws://refuse-the-r.ing")),
-                    discord_id: "293847".parse().unwrap(),
+                    discord_id: None,
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
