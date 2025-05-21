@@ -85,7 +85,14 @@ fn create_error_template() -> Tera {
     tera
 }
 
-async fn serve_index(State(webring): State<Arc<Webring>>) -> Result<Response, RouteError> {
+async fn serve_index(
+    State(webring): State<Arc<Webring>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> Result<Response, RouteError> {
+    let maybe_origin = get_origin_from_request(headers, params).ok();
+    webring.track_to_homepage_click(maybe_origin.as_ref(), addr.ip());
     Ok(Html(webring.homepage().await?.to_html().to_owned()).into_response())
 }
 

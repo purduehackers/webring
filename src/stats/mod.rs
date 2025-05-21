@@ -4,7 +4,10 @@
 
 use std::{
     net::IpAddr,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        LazyLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, Utc};
@@ -14,6 +17,8 @@ use sarlacc::Intern;
 
 const IP_TRACKING_TTL: chrono::TimeDelta = Duration::days(1);
 const TIMEZONE: chrono::FixedOffset = FixedOffset::west_opt(5 * 3600).unwrap();
+
+pub static UNKNOWN_ORIGIN: LazyLock<Intern<str>> = LazyLock::new(|| Intern::from_ref("unknown"));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct IpInfo {
