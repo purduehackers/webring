@@ -25,7 +25,6 @@ html-escape = "0.2.13"
 log = "0.4.27"
 notify = "8.0.0"
 papaya = { version = "0.2.1", features = ["serde"] }
-parquet = { version = "55.1.0", default-features = false, features = ["flate2"] }
 quick-xml = { version = "0.37.5", features = ["async-tokio"] }
 rand = "0.9.1"
 reqwest = { version = "0.12.15", features = ["stream"] }

@@ -10,7 +10,7 @@ use std::{
 
 use axum::http::{Uri, uri::Authority};
 use chrono::TimeDelta;
-use eyre::eyre;
+use eyre::{OptionExt, eyre};
 use futures::{StreamExt, stream::FuturesUnordered};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rand::seq::SliceRandom;
@@ -22,7 +22,7 @@ use thiserror::Error;
 use crate::{
     checking::check,
     homepage::{Homepage, MemberForHomepage},
-    stats::Stats,
+    stats::{Stats, UNKNOWN_ORIGIN},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,7 +69,7 @@ struct WebringData {
 }
 
 /// The data structure underlying a webring. Implements the core webring functionality.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Webring {
     // https://docs.rs/tokio/latest/tokio/sync/struct.Mutex.html#which-kind-of-mutex-should-you-use
     // This is a good case for std locks because we will never need to hold it across an await
@@ -80,7 +80,24 @@ pub struct Webring {
     static_dir_path: PathBuf,
     file_watcher: OnceLock<RecommendedWatcher>,
     base_address: Intern<Uri>,
+    base_authority: Intern<str>,
     stats: Arc<Stats>,
+}
+
+// Change this if Henry figures out how to make a sensible `Default` implementation for `Intern<*something unsized*>` in sarlacc
+impl Default for Webring {
+    fn default() -> Self {
+        Webring {
+            inner: RwLock::default(),
+            homepage: tokio::sync::RwLock::default(),
+            members_file_path: PathBuf::default(),
+            static_dir_path: PathBuf::default(),
+            file_watcher: OnceLock::new(),
+            base_address: Intern::default(),
+            base_authority: Intern::from_ref("ring.purduehacker.com"),
+            stats: Arc::default(),
+        }
+    }
 }
 
 impl Webring {
@@ -101,6 +118,14 @@ impl Webring {
             stats: Arc::new(stats),
             file_watcher: OnceLock::default(),
             base_address,
+            base_authority: Intern::from_ref(
+                base_address
+                    .authority()
+                    .ok_or_eyre(
+                        "The base address does not include an authority component (is relative)",
+                    )?
+                    .as_str(),
+            ),
         };
 
         webring.check_members().await?;
@@ -160,21 +185,24 @@ impl Webring {
         ret
     }
 
+    fn get_authority(uri: &Uri) -> Result<Intern<str>, TraverseWebringError> {
+        let authority = uri
+            .authority()
+            .ok_or_else(|| TraverseWebringError::NoAuthority(uri.to_owned()))?;
+        Intern::get_ref(authority.as_str())
+            .ok_or_else(|| TraverseWebringError::AuthorityNotFound(authority.to_owned()))
+    }
+
     fn member_idx_and_lock(
         &self,
         uri: &Uri,
     ) -> Result<(usize, Intern<str>, RwLockReadGuard<'_, WebringData>), TraverseWebringError> {
-        let authority = uri
-            .authority()
-            .ok_or_else(|| TraverseWebringError::NoAuthority(uri.to_owned()))?;
-        let interned = Intern::get_ref(authority.as_str())
-            .ok_or_else(|| TraverseWebringError::AuthorityNotFound(authority.to_owned()))?;
+        let interned = Self::get_authority(uri)?;
         let inner = self.inner.read().unwrap();
         Ok((
-            *inner
-                .members_table
-                .get(&interned)
-                .ok_or_else(|| TraverseWebringError::AuthorityNotFound(authority.to_owned()))?,
+            *inner.members_table.get(&interned).ok_or_else(|| {
+                TraverseWebringError::AuthorityNotFound(uri.authority().unwrap().to_owned())
+            })?,
             interned,
             inner,
         ))
@@ -231,6 +259,8 @@ impl Webring {
     /// If the `origin` has a value, the returned page will be different from the one referred to
     /// by the value. This prevents a user who has a `/random` link on their site from being sent
     /// back to the site they came from.
+    ///
+    /// If `origin` does not have a value, the request will be logged as coming from an unknown source.
     pub fn random_page(
         &self,
         maybe_origin: Option<&Uri>,
@@ -258,7 +288,7 @@ impl Webring {
             {
                 self.stats.redirected(
                     ip,
-                    maybe_authority.unwrap_or_else(|| Intern::from_ref("unknown")),
+                    maybe_authority.unwrap_or_else(|| *UNKNOWN_ORIGIN),
                     inner.ordering[chosen].authority,
                 );
 
@@ -271,6 +301,25 @@ impl Webring {
         warn!("All webring members are broken???");
 
         Err(TraverseWebringError::AllMembersFailing)
+    }
+
+    /// Track a click from to the webring homepage. If there is no authority or the authority isn't found, this will say that the source is "unknown".
+    pub fn track_to_homepage_click(&self, maybe_member_page: Option<&Uri>, ip: IpAddr) {
+        let interned = maybe_member_page
+            .and_then(|member_page| Self::get_authority(member_page).ok())
+            .unwrap_or_else(|| *UNKNOWN_ORIGIN);
+        self.stats.redirected(ip, interned, self.base_authority);
+    }
+
+    /// Track a click from the webring homepage to a ring member. This returns a result because redirecting someone to an invalid URI is a problem on our side.
+    pub fn track_from_homepage_click(
+        &self,
+        member_page: &Uri,
+        ip: IpAddr,
+    ) -> Result<(), TraverseWebringError> {
+        let interned = Self::get_authority(member_page)?;
+        self.stats.redirected(ip, self.base_authority, interned);
+        Ok(())
     }
 
     /// Return a server-side rendered homepage.
