@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display, io::ErrorKind};
+use std::{fmt::Display, io::ErrorKind};
 
 use axum::http::{Uri, uri::Scheme};
 use chrono::Utc;
@@ -65,7 +65,7 @@ async fn is_online() -> bool {
 pub async fn check(
     website: &Uri,
     check_level: CheckLevel,
-    base_address: Uri,
+    base_address: &Uri,
 ) -> Option<CheckFailure> {
     match check_impl(website, check_level, base_address).await {
         None => None,
@@ -86,7 +86,7 @@ pub async fn check(
 async fn check_impl(
     website: &Uri,
     check_level: CheckLevel,
-    base_address: Uri,
+    base_address: &Uri,
 ) -> Option<CheckFailure> {
     if check_level == CheckLevel::None {
         return None;
@@ -205,11 +205,9 @@ impl Display for MissingLinks {
     }
 }
 
-impl Error for MissingLinks {}
-
 async fn contains_link(
     webpage: impl tokio::io::AsyncBufRead + Unpin,
-    base_address: Uri,
+    base_address: &Uri,
 ) -> Option<MissingLinks> {
     // Streams HTML tokens
     let mut reader = Reader::from_reader(webpage);
@@ -217,7 +215,7 @@ async fn contains_link(
     let decoder = reader.decoder();
 
     let mut missing_links = MissingLinks {
-        base_address,
+        base_address: base_address.clone(),
         home: true,
         next: true,
         prev: true,
@@ -293,7 +291,7 @@ mod tests {
         assert_eq!(
             contains_link(
                 file.replace("ADDRESS", base_address).as_bytes(),
-                Uri::from_static(base_address)
+                &Uri::from_static(base_address)
             )
             .await,
             res.into().map(|(home, prev, next)| MissingLinks {

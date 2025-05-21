@@ -42,7 +42,7 @@ struct Member {
 impl Member {
     fn check_and_store_and_optionally_notify(
         &self,
-        base_address: Uri,
+        base_address: &Uri,
         notifier: Option<Arc<DiscordNotifier>>,
     ) -> impl Future<Output = eyre::Result<()>> + Send + 'static {
         let website = Arc::clone(&self.website);
@@ -50,8 +50,9 @@ impl Member {
         let successful = Arc::clone(&self.check_successful);
 
         let discord_id_for_block = self.discord_id;
+        let base_address_for_block = base_address.clone();
         async move {
-            if let Some(failure) = check(&website, check_level, base_address).await {
+            if let Some(failure) = check(&website, check_level, &base_address_for_block).await {
                 successful.store(false, Ordering::Relaxed);
                 if let Some(notifier) = notifier {
                     tokio::spawn(async move {
@@ -136,7 +137,7 @@ impl Webring {
                     None => {
                         tasks.push(
                             new_members.ordering[*idx].check_and_store_and_optionally_notify(
-                                self.base_address.clone(),
+                                &self.base_address,
                                 self.notifier.as_ref().map(Arc::clone),
                             ),
                         );
@@ -162,9 +163,7 @@ impl Webring {
             let inner = self.inner.read().unwrap();
 
             for member in &inner.ordering {
-                tasks.push(
-                    member.check_and_store_and_optionally_notify(self.base_address.clone(), None),
-                );
+                tasks.push(member.check_and_store_and_optionally_notify(&self.base_address, None));
             }
         }
 
