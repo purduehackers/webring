@@ -431,7 +431,10 @@ mod tests {
     use tower::ServiceExt;
     use tower_http::catch_panic::ResponseForPanic;
 
-    use crate::{stats::TIMEZONE, webring::Webring};
+    use crate::{
+        stats::{TIMEZONE, UNKNOWN_ORIGIN},
+        webring::Webring,
+    };
 
     use super::{OriginUriLocation, PanicResponse, RouteError, create_router};
 
@@ -555,9 +558,9 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         webring.assert_stat_entry(
             (
                 today,
-                i("unknown"),
+                *UNKNOWN_ORIGIN,
                 i("ring.purduehackers.com"),
-                i("unknown"),
+                *UNKNOWN_ORIGIN,
             ),
             1,
         );
