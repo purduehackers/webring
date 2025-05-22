@@ -303,7 +303,7 @@ impl Webring {
         Err(TraverseWebringError::AllMembersFailing)
     }
 
-    /// Track a click from to the webring homepage. If there is no authority or the authority isn't found, this will say that the source is "unknown".
+    /// Track a click to the webring homepage. If there is no authority for the origin or the authority isn't found, this will say that the source is "unknown".
     pub fn track_to_homepage_click(&self, maybe_member_page: Option<&Uri>, ip: IpAddr) {
         let interned = maybe_member_page
             .and_then(|member_page| Self::get_authority(member_page).ok())
@@ -316,10 +316,12 @@ impl Webring {
         &self,
         member_page: &Uri,
         ip: IpAddr,
-    ) -> Result<(), TraverseWebringError> {
-        let interned = Self::get_authority(member_page)?;
-        self.stats.redirected(ip, self.base_authority, interned);
-        Ok(())
+    ) -> Result<Intern<Uri>, TraverseWebringError> {
+        let (idx, authority, inner) = self.member_idx_and_lock(member_page)?;
+
+        self.stats.redirected(ip, self.base_authority, authority);
+
+        Ok(inner.ordering[idx].website)
     }
 
     /// Return a server-side rendered homepage.
@@ -353,7 +355,8 @@ impl Webring {
                     .collect::<Vec<_>>()
             };
 
-            let homepage = Arc::new(Homepage::new(&self.static_dir_path, &members).await?);
+            let homepage =
+                Arc::new(Homepage::new(&self.static_dir_path, self.base_address, &members).await?);
 
             *maybe_homepage = Some(Arc::clone(&homepage));
 
