@@ -570,10 +570,14 @@ mod tests {
     };
 
     use axum::http::{Uri, uri::Authority};
+    use chrono::Utc;
     use sarlacc::Intern;
     use tempfile::{NamedTempFile, TempDir};
 
-    use crate::webring::{CheckLevel, Webring};
+    use crate::{
+        stats::{TIMEZONE, UNKNOWN_ORIGIN},
+        webring::{CheckLevel, Webring},
+    };
 
     use super::{Member, TraverseWebringError};
 
@@ -612,7 +616,7 @@ mod tests {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     #[tokio::test]
     async fn test_webring() {
         let members_file = NamedTempFile::new().unwrap();
@@ -685,14 +689,34 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             assert_eq!(inner.ordering, expected_ordering);
         }
 
+        let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
+
         webring.assert_next(
             "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
             Ok("kasad.com"),
+        );
+        webring.assert_stat_entry(
+            (
+                today,
+                Intern::from_ref("hrovnyak.gitlab.io"),
+                Intern::from_ref("kasad.com"),
+                Intern::from_ref("hrovnyak.gitlab.io"),
+            ),
+            1,
         );
 
         webring.assert_prev(
             "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
             Ok("ws://refuse-the-r.ing"),
+        );
+        webring.assert_stat_entry(
+            (
+                today,
+                Intern::from_ref("hrovnyak.gitlab.io"),
+                Intern::from_ref("refuse-the-r.ing"),
+                Intern::from_ref("hrovnyak.gitlab.io"),
+            ),
+            1,
         );
 
         webring.assert_next("huh://refuse-the-r.ing", Ok("hrovnyak.gitlab.io"));
@@ -834,6 +858,86 @@ kian — kasad.com — 456 — NonE
 
         webring.assert_prev("refuse-the-r.ing", Ok("arhan.sh"));
         webring.assert_next("kasad.com", Ok("arhan.sh"));
+    }
+
+    #[tokio::test]
+    async fn test_random_stats_unknown_origin() {
+        let members_file = NamedTempFile::new().unwrap();
+        tokio::fs::write(
+            members_file.path(),
+            "
+kian — kasad.com — 456 — NonE
+",
+        )
+        .await
+        .unwrap();
+        let static_dir = TempDir::new().unwrap();
+
+        let webring = Webring::new(
+            members_file.path().to_owned(),
+            static_dir.path().to_owned(),
+            Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+        )
+        .await
+        .unwrap();
+
+        let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
+
+        let uri = webring
+            .random_page(None, "0.0.0.0".parse().unwrap())
+            .unwrap();
+        assert_eq!(uri, Intern::new("kasad.com".parse().unwrap()));
+        webring.assert_stat_entry(
+            (
+                today,
+                *UNKNOWN_ORIGIN,
+                Intern::from_ref("kasad.com"),
+                *UNKNOWN_ORIGIN,
+            ),
+            1,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_random_stats() {
+        let members_file = NamedTempFile::new().unwrap();
+        tokio::fs::write(
+            members_file.path(),
+            "
+kian — kasad.com — 456 — NonE
+cynthia — https://clementine.viridian.page — 789 — nONE
+",
+        )
+        .await
+        .unwrap();
+        let static_dir = TempDir::new().unwrap();
+
+        let webring = Webring::new(
+            members_file.path().to_owned(),
+            static_dir.path().to_owned(),
+            Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+        )
+        .await
+        .unwrap();
+
+        let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
+
+        let uri = webring
+            .random_page(
+                Some(&"clementine.viridian.page".parse().unwrap()),
+                "0.0.0.0".parse().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(uri, Intern::new("kasad.com".parse().unwrap()));
+        webring.assert_stat_entry(
+            (
+                today,
+                Intern::from_ref("clementine.viridian.page"),
+                Intern::from_ref("kasad.com"),
+                Intern::from_ref("clementine.viridian.page"),
+            ),
+            1,
+        );
     }
 
     /// Creates a members list file and a static directory containing an `index.html` file.
