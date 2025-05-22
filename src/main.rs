@@ -167,7 +167,7 @@ async fn main() -> ExitCode {
     log::info!("Watching {} for changes", cli.members_file.display());
 
     // Start server
-    let router = create_router(&cli).with_state(Arc::clone(&webring));
+    let router = create_router(&cli.static_dir).with_state(Arc::clone(&webring));
     let bind_addr = &cli.listen_addr;
     match tokio::net::TcpListener::bind(bind_addr).await {
         // Unwrapping this is fine because it will never resolve
