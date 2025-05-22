@@ -18,7 +18,7 @@ use log::{debug, error, info, warn};
 use thiserror::Error;
 
 use crate::{
-    checking::check,
+    checking::{CheckFailure, check},
     discord::{DiscordNotifier, Snowflake},
     homepage::{Homepage, MemberForHomepage},
 };
@@ -62,7 +62,7 @@ impl Member {
         &self,
         base_address: &Uri,
         notifier: Option<Arc<DiscordNotifier>>,
-    ) -> impl Future<Output = eyre::Result<()>> + Send + 'static {
+    ) -> impl Future<Output = Option<CheckFailure>> + Send + 'static {
         let website = Arc::clone(&self.website);
         let check_level = self.check_level;
         let successful = Arc::clone(&self.check_successful);
@@ -70,21 +70,22 @@ impl Member {
         let discord_id_for_block = self.discord_id;
         let base_address_for_block = base_address.clone();
         async move {
-            if let Some(failure) = check(&website, check_level, &base_address_for_block).await {
+            let check_result = check(&website, check_level, &base_address_for_block).await;
+            if let Some(failure) = &check_result {
                 successful.store(false, Ordering::Relaxed);
                 if let (Some(notifier), Some(user_id)) = (notifier, discord_id_for_block) {
+                    let message = failure.to_message();
                     tokio::spawn(async move {
-                        notifier.send_message(
-                            Some(user_id),
-                            &format!("Your site ({website}) failed validation for the following reason:\n{failure}"),
-                        ).await.unwrap();
+                        notifier
+                            .send_message(Some(user_id), &message)
+                            .await
+                            .unwrap();
                     });
                 }
             } else {
                 successful.store(true, Ordering::Relaxed);
             }
-
-            Ok(())
+            check_result
         }
     }
 }
@@ -134,12 +135,13 @@ impl Webring {
         })
     }
 
-    /// Update the webring in-place by re-parsing the file given in the original `new` call, and invalidating the cache of the SSR'ed homepage.
+    /// Update the webring in-place by re-parsing the file given in the original `new` call, and
+    /// invalidating the cache of the SSR'ed homepage. All new URLs are checked.
     ///
     /// Useful for updating the webring without restarting the server.
-    pub async fn update_from_file(&self) -> eyre::Result<()> {
+    pub async fn update_from_file_and_check(&self) -> eyre::Result<()> {
         let mut new_members = parse_file(&self.members_file_path).await?;
-        let tasks = FuturesUnordered::new();
+        let mut tasks = FuturesUnordered::new();
 
         {
             let old_members = self.inner.read().unwrap();
@@ -163,18 +165,17 @@ impl Webring {
             }
         }
 
-        let ret = collect_errs(tasks).await;
+        // Wait for all tasks
+        while tasks.next().await.is_some() {}
 
         *self.inner.write().unwrap() = new_members;
-
         *self.homepage.write().await = None;
-
-        ret
+        Ok(())
     }
 
     /// Query everyone's webpages and check them according to their respective check levels.
-    pub async fn check_members(&self) -> eyre::Result<()> {
-        let tasks = self
+    pub async fn check_members(&self) {
+        let mut tasks = self
             .inner
             .read()
             .unwrap()
@@ -188,11 +189,10 @@ impl Webring {
             })
             .collect::<FuturesUnordered<_>>();
 
-        let ret = collect_errs(tasks).await;
+        // Wait for all tasks
+        while tasks.next().await.is_some() {}
 
         *self.homepage.write().await = None;
-
-        ret
     }
 
     fn member_idx_and_lock(
@@ -373,7 +373,9 @@ impl Webring {
                                 );
                                 let webring_for_task = Arc::clone(&webring);
                                 rt.spawn(async move {
-                                    if let Err(err) = webring_for_task.update_from_file().await {
+                                    if let Err(err) =
+                                        webring_for_task.update_from_file_and_check().await
+                                    {
                                         error!("Failed to update webring: {err}");
                                     }
                                     info!("Webring reloaded");
@@ -405,26 +407,6 @@ impl Webring {
         watcher.watch(&homepage_template_path, RecursiveMode::NonRecursive)?;
         let _ = self.file_watcher.set(watcher);
         Ok(())
-    }
-}
-
-async fn collect_errs(
-    tasks: FuturesUnordered<impl Future<Output = Result<(), eyre::Error>> + Send>,
-) -> Result<(), eyre::Error> {
-    let errs = tasks
-        .filter_map(async |res| res.err())
-        .collect::<Vec<_>>()
-        .await;
-
-    if errs.is_empty() {
-        Ok(())
-    } else {
-        Err(eyre!(
-            errs.into_iter()
-                .map(|v| v.to_string())
-                .collect::<Vec<_>>()
-                .join("\n\n")
-        ))
     }
 }
 
@@ -502,14 +484,8 @@ mod tests {
         time::Duration,
     };
 
-    use axum::{
-        Router,
-        http::{Uri, uri::Authority},
-        response::Html,
-        routing::get,
-    };
+    use axum::http::{Uri, uri::Authority};
     use pretty_assertions::assert_eq;
-    use reqwest::StatusCode;
     use tempfile::{NamedTempFile, TempDir};
 
     use crate::webring::{CheckLevel, Webring};
@@ -711,7 +687,7 @@ kian — kasad.com — 456 — NonE
         .await
         .unwrap();
 
-        webring.update_from_file().await.unwrap();
+        webring.update_from_file_and_check().await.unwrap();
 
         webring.assert_next("clementine.viridian.page", Ok("http://refuse-the-r.ing"));
         webring.assert_next("hrovnyak.gitlab.io", Ok("http://refuse-the-r.ing"));
@@ -848,107 +824,5 @@ kian — kasad.com — 123 — none";
         webring.enable_reloading().unwrap();
         drop(webring);
         assert!(weak_ptr.upgrade().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_checks() {
-        // Start a web server so we can do each kinds of checks
-        let server_addr = ("127.0.0.1", 32750);
-        tokio::spawn(async move {
-            let listener = tokio::net::TcpListener::bind(&server_addr).await.unwrap();
-            let router: Router<()> = Router::new()
-                .route("/up", get(async || "Hi there!"))
-                .route(
-                    "/links",
-                    get(async || {
-                        Html(
-                            r#"
-                        <a href="https://ring.purduehackers.com/">Purdue Hackers webring</a>
-                        <a href="https://ring.purduehackers.com/prev">Previous site</a>
-                        <a href="https://ring.purduehackers.com/next">Next site</a>
-                        "#,
-                        )
-                    }),
-                )
-                .route(
-                    "/error",
-                    get(async || {
-                        let status = StatusCode::from_u16(rand::random_range(400..600)).unwrap();
-                        (status, "Uh oh :(")
-                    }),
-                );
-            axum::serve(listener, router).await.unwrap();
-        });
-
-        // Create a site for each endpoint, plus one which will fail to connect.
-        // The second value in the tuple is the list of checks for which this member should succeed.
-        let sites = [
-            (
-                Member {
-                    name: "Connection Error".to_owned(),
-                    website: Uri::from_static("http://127.0.0.10:0/links").into(),
-                    discord_id: None,
-                    check_level: CheckLevel::None,
-                    check_successful: AtomicBool::new(true).into(),
-                },
-                vec![CheckLevel::None],
-            ),
-            (
-                Member {
-                    name: "HTTP Error".to_owned(),
-                    website: Uri::from_static("http://127.0.0.1:32750/error").into(),
-                    discord_id: None,
-                    check_level: CheckLevel::None,
-                    check_successful: AtomicBool::new(true).into(),
-                },
-                vec![CheckLevel::None],
-            ),
-            (
-                Member {
-                    name: "Up".to_owned(),
-                    website: Uri::from_static("http://127.0.0.1:32750/up").into(),
-                    discord_id: None,
-                    check_level: CheckLevel::None,
-                    check_successful: AtomicBool::new(true).into(),
-                },
-                vec![CheckLevel::None, CheckLevel::JustOnline],
-            ),
-            (
-                Member {
-                    name: "Links".to_owned(),
-                    website: Uri::from_static("http://127.0.0.1:32750/links").into(),
-                    discord_id: None,
-                    check_level: CheckLevel::None,
-                    check_successful: AtomicBool::new(true).into(),
-                },
-                vec![
-                    CheckLevel::None,
-                    CheckLevel::JustOnline,
-                    CheckLevel::ForLinks,
-                ],
-            ),
-        ];
-
-        let base = Uri::from_static("https://ring.purduehackers.com");
-        for (mut member, expect_passing) in sites {
-            let levels = [
-                CheckLevel::None,
-                CheckLevel::JustOnline,
-                CheckLevel::ForLinks,
-            ];
-            for level in levels {
-                // FIXME: Collect CheckFailure and check type
-                member.check_level = level;
-                member
-                    .check_and_store_and_optionally_notify(&base, None)
-                    .await
-                    .unwrap();
-                eprintln!("Checking {} at level {:?}", &member.name, level);
-                assert_eq!(
-                    expect_passing.contains(&level),
-                    member.check_successful.load(Ordering::Relaxed)
-                );
-            }
-        }
     }
 }

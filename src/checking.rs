@@ -1,4 +1,7 @@
-use std::{fmt::Display, io::ErrorKind};
+use std::{
+    fmt::{Display, Write as _},
+    io::ErrorKind,
+};
 
 use axum::http::{Uri, uri::Scheme};
 use chrono::Utc;
@@ -17,7 +20,7 @@ static ONLINE_CHECK_TTL_MS: i64 = 1000;
 static PING_INFO: RwLock<(i64, bool)> = RwLock::const_new((i64::MIN, false));
 
 /// If a request succeeds, then call this function to mark the server as definitely online.
-async fn server_definitely_online() {
+async fn mark_server_as_online() {
     let at = Utc::now().timestamp_millis();
     let mut ping_info = PING_INFO.write().await;
     let now = Utc::now().timestamp_millis();
@@ -61,7 +64,8 @@ async fn is_online() -> bool {
 
 /// Checks whether a given URL passes the given check level.
 ///
-/// Returns `Some` with the failure details if the site
+/// Returns `Some` with the failure details if the site fails the check, or `None` if it passes (or
+/// if the check cannot be performed, e.g., due to the server being offline).
 pub async fn check(
     website: &Uri,
     check_level: CheckLevel,
@@ -70,15 +74,20 @@ pub async fn check(
     match check_impl(website, check_level, base_address).await {
         None => None,
         Some(failure) => {
-            // TODO: Discord
-
-            if is_online().await {
-                info!("{website} failed a check: {failure}");
-                Some(failure)
-            } else {
-                error!("Server side connectivity issue detected!");
-                None
+            // If the issue is not a connection issue, or if it is a connection issue and the
+            // server is online, return it. Otherwise, it's a connection issue on our end, so log
+            // and count the check as successful.
+            if let CheckFailure::Connection(connection_error) = &failure {
+                if !is_online().await {
+                    error!(
+                        "Server-side connectivity issue detected: Could not reach {website}: {connection_error}"
+                    );
+                    return None;
+                }
             }
+
+            info!("{website} failed a check: {failure}");
+            Some(failure)
         }
     }
 }
@@ -100,12 +109,12 @@ async fn check_impl(
         Ok(r) => r,
         Err(err) => return Some(CheckFailure::ResponseStatus(err.status().unwrap())),
     };
-    server_definitely_online().await;
+    mark_server_as_online().await;
 
     if check_level == CheckLevel::ForLinks {
         let stream = successful_response.bytes_stream();
 
-        return contains_link(
+        return scan_for_links(
             StreamReader::new(stream.map_err(|e| std::io::Error::new(ErrorKind::Other, e))),
             base_address,
         )
@@ -127,26 +136,61 @@ pub enum CheckFailure {
     MissingLinks(MissingLinks),
 }
 
-impl Display for CheckFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            CheckFailure::Connection(err) => write!(f, "Connection to your site failed: {err}")?,
+impl CheckFailure {
+    /// Construct a message suitable for the site owner about the given check failure. For
+    /// a shorter message format suitable for debugging/logging, use the [`Display`] trait.
+    #[must_use]
+    pub fn to_message(&self) -> String {
+        match self {
+            CheckFailure::Connection(err) => format!("Connection to your site failed: {err}"),
             CheckFailure::ResponseStatus(status_code) => {
-                write!(
-                    f,
+                let mut msg = format!(
                     "Your site returned an error response: {}",
                     status_code.as_u16()
-                )?;
+                );
                 if let Some(description) = status_code.canonical_reason() {
-                    write!(f, " ({description})")?;
+                    write!(&mut msg, " ({description})").unwrap();
                 }
+                msg
+            }
+            CheckFailure::MissingLinks(missing_links) => missing_links.to_string(),
+        }
+    }
+}
+
+/// Displays this check failure in a short format suitable for debugging/logging but not suitable
+/// for sending to a site owner. For that, use [`CheckFailure::to_message()`].
+impl Display for CheckFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CheckFailure::Connection(error) => write!(f, "Connection error: {error}"),
+            CheckFailure::ResponseStatus(status_code) => {
+                write!(f, "Site returned {}", status_to_string(*status_code))
             }
             CheckFailure::MissingLinks(missing_links) => {
-                missing_links.fmt(f)?;
+                let mut missing_link_names = Vec::with_capacity(3);
+                if missing_links.home {
+                    missing_link_names.push("ring homepage");
+                }
+                if missing_links.prev {
+                    missing_link_names.push("previous site");
+                }
+                if missing_links.next {
+                    missing_link_names.push("next site");
+                }
+                write!(f, "Missing links: {}", missing_link_names.join(", "))
             }
         }
-        Ok(())
     }
+}
+
+/// Format a status code as `Code (Reason String)`, e.g. `404 (Not Found)`.
+fn status_to_string(status: StatusCode) -> String {
+    let mut msg = status.as_u16().to_string();
+    if let Some(description) = status.canonical_reason() {
+        write!(&mut msg, " ({description})").unwrap();
+    }
+    msg
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -205,7 +249,7 @@ impl Display for MissingLinks {
     }
 }
 
-async fn contains_link(
+async fn scan_for_links(
     webpage: impl tokio::io::AsyncBufRead + Unpin,
     base_address: &Uri,
 ) -> Option<MissingLinks> {
@@ -279,9 +323,10 @@ async fn contains_link(
 
 #[cfg(test)]
 mod tests {
-    use axum::http::Uri;
+    use axum::{Router, http::Uri, response::Html, routing::get};
+    use reqwest::StatusCode;
 
-    use super::{MissingLinks, contains_link};
+    use super::{CheckFailure, CheckLevel, MissingLinks, scan_for_links};
 
     async fn assert_links_gives(
         base_address: &'static str,
@@ -289,7 +334,7 @@ mod tests {
         res: impl Into<Option<(bool, bool, bool)>>,
     ) {
         assert_eq!(
-            contains_link(
+            scan_for_links(
                 file.replace("ADDRESS", base_address).as_bytes(),
                 &Uri::from_static(base_address)
             )
@@ -448,5 +493,86 @@ mod tests {
             (true, true, false),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn check_failure_types() {
+        // Start a web server so we can do each kinds of checks
+        let server_addr = ("127.0.0.1", 32750);
+        tokio::spawn(async move {
+            let listener = tokio::net::TcpListener::bind(&server_addr).await.unwrap();
+            let router: Router<()> = Router::new()
+                .route("/up", get(async || "Hi there!"))
+                .route(
+                    "/links",
+                    get(async || {
+                        Html(
+                            r#"
+                        <a href="https://ring.purduehackers.com/">Purdue Hackers webring</a>
+                        <a href="https://ring.purduehackers.com/prev">Previous site</a>
+                        <a href="https://ring.purduehackers.com/next">Next site</a>
+                        "#,
+                        )
+                    }),
+                )
+                .route(
+                    "/error",
+                    get(async || {
+                        let status = StatusCode::from_u16(rand::random_range(400..600)).unwrap();
+                        (status, "Uh oh :(")
+                    }),
+                );
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        // Create a site for each endpoint, plus one which will fail to connect.
+        // The second value in the tuple is the list of checks for which this member should succeed.
+        // The third is the check failure we expect.
+        #[expect(clippy::type_complexity)]
+        let sites: Vec<(Uri, Vec<CheckLevel>, fn(CheckFailure) -> bool)> = vec![
+            (
+                Uri::from_static("http://127.0.0.10:0/connection"),
+                vec![CheckLevel::None],
+                |failure| matches!(failure, CheckFailure::Connection(_)),
+            ),
+            (
+                Uri::from_static("http://127.0.0.1:32750/error"),
+                vec![CheckLevel::None],
+                |failure| matches!(failure, CheckFailure::ResponseStatus(_)),
+            ),
+            (
+                Uri::from_static("http://127.0.0.1:32750/up"),
+                vec![CheckLevel::None, CheckLevel::JustOnline],
+                |failure| matches!(failure, CheckFailure::MissingLinks(_)),
+            ),
+            (
+                Uri::from_static("http://127.0.0.1:32750/links"),
+                vec![
+                    CheckLevel::None,
+                    CheckLevel::JustOnline,
+                    CheckLevel::ForLinks,
+                ],
+                |_| false,
+            ),
+        ];
+
+        let base = Uri::from_static("https://ring.purduehackers.com");
+        for (site, expect_passing, does_failure_match) in sites {
+            let levels = [
+                CheckLevel::None,
+                CheckLevel::JustOnline,
+                CheckLevel::ForLinks,
+            ];
+            for level in levels {
+                // FIXME: Collect CheckFailure and check type
+                let maybe_failure = super::check(&site, level, &base).await;
+                eprintln!("Checking {} at level {:?}", &site, level);
+                let was_successful = maybe_failure.is_none();
+                assert_eq!(expect_passing.contains(&level), was_successful);
+                if !was_successful {
+                    assert!(does_failure_match(maybe_failure.unwrap()));
+                }
+            }
+        }
     }
 }
