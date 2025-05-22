@@ -227,7 +227,8 @@ impl MissingLinks {
 
 impl Display for MissingLinks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let address = &self.base_address;
+        let address_string = self.base_address.to_string();
+        let address = address_string.strip_suffix('/').unwrap_or(&address_string);
         writeln!(f, "Your site is missing the following links:")?;
         if self.home {
             writeln!(f, "- {address}")?;
