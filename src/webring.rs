@@ -51,7 +51,6 @@ impl FromStr for CheckLevel {
 struct Member {
     name: String,
     website: Arc<Uri>,
-    #[allow(dead_code)] // FIXME: Remove once Discord integration is implemented
     discord_id: Option<Snowflake>,
     check_level: CheckLevel,
     check_successful: Arc<AtomicBool>,
