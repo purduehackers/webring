@@ -105,11 +105,11 @@ async fn check_impl(
         Ok(response) => response,
         Err(err) => return Some(CheckFailure::Connection(err)),
     };
+    mark_server_as_online().await;
     let successful_response = match response.error_for_status() {
         Ok(r) => r,
         Err(err) => return Some(CheckFailure::ResponseStatus(err.status().unwrap())),
     };
-    mark_server_as_online().await;
 
     if check_level == CheckLevel::ForLinks {
         let stream = successful_response.bytes_stream();
