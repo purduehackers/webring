@@ -456,6 +456,15 @@ impl Webring {
             }
         });
     }
+
+    #[cfg(test)]
+    pub fn assert_stat_entry(
+        &self,
+        entry: (chrono::NaiveDate, Intern<str>, Intern<str>, Intern<str>),
+        count: u64,
+    ) {
+        self.stats.assert_stat_entry(entry, count);
+    }
 }
 
 async fn collect_errs(

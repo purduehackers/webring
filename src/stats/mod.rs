@@ -16,7 +16,7 @@ use papaya::HashMap;
 use sarlacc::Intern;
 
 const IP_TRACKING_TTL: chrono::TimeDelta = Duration::days(1);
-const TIMEZONE: chrono::FixedOffset = FixedOffset::west_opt(5 * 3600).unwrap();
+pub const TIMEZONE: chrono::FixedOffset = FixedOffset::west_opt(5 * 3600).unwrap();
 
 pub static UNKNOWN_ORIGIN: LazyLock<Intern<str>> = LazyLock::new(|| Intern::from_ref("unknown"));
 
@@ -86,6 +86,23 @@ impl Stats {
         ip_tracking.retain(|_ip_addr, info| now - info.last_seen < IP_TRACKING_TTL);
         let after = ip_tracking.len();
         info!("Pruned ~{} IP addresses", after as i64 - before as i64);
+    }
+
+    #[cfg(test)]
+    pub fn assert_stat_entry(
+        &self,
+        entry: (NaiveDate, Intern<str>, Intern<str>, Intern<str>),
+        count: u64,
+    ) {
+        assert_eq!(
+            self.aggregated
+                .counters
+                .pin()
+                .get(&entry)
+                .map_or(0, |v| v.load(Ordering::Relaxed)),
+            count,
+            "{self:#?}"
+        );
     }
 }
 
