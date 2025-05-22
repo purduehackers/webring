@@ -114,7 +114,7 @@ impl DiscordNotifier {
             .send()
             .await
             .map_err(reqwest::Error::without_url)
-            .wrap_err("Failed to send notification to Discord")
+            .wrap_err("Failed to execute Discord webhook")
     }
 }
 

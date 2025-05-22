@@ -75,10 +75,9 @@ impl Member {
                 if let (Some(notifier), Some(user_id)) = (notifier, discord_id_for_block) {
                     let message = format!("<@{}> {}", user_id, failure.to_message());
                     tokio::spawn(async move {
-                        notifier
-                            .send_message(Some(user_id), &message)
-                            .await
-                            .unwrap();
+                        if let Err(err) = notifier.send_message(Some(user_id), &message).await {
+                            log::error!("Error sending Discord notification: {err}");
+                        }
                     });
                 }
             } else {
