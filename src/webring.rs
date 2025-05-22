@@ -73,7 +73,7 @@ impl Member {
             if let Some(failure) = &check_result {
                 successful.store(false, Ordering::Relaxed);
                 if let (Some(notifier), Some(user_id)) = (notifier, discord_id_for_block) {
-                    let message = failure.to_message();
+                    let message = format!("<@{}> {}", user_id, failure.to_message());
                     tokio::spawn(async move {
                         notifier
                             .send_message(Some(user_id), &message)

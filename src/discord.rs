@@ -5,7 +5,7 @@
 //! [webhook-api-ref]: https://discord.com/developers/docs/resources/webhook#execute-webhook
 //! [^webhook]: Note lakjdf
 
-use std::{str::FromStr, time::Duration};
+use std::{fmt::Display, str::FromStr, time::Duration};
 
 use eyre::{Context, bail};
 use reqwest::{
@@ -44,6 +44,11 @@ impl FromStr for Snowflake {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         s.parse().map(Self)
+    }
+}
+impl Display for Snowflake {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -99,7 +104,7 @@ impl DiscordNotifier {
                 {
                     "content": message,
                     "allowed_mentions": match ping {
-                        Some(id) => json!({ "users": [id] }),
+                        Some(id) => json!({ "users": [id.to_string()] }),
                         None => json!({}),
                     },
                     "flags": SUPPRESS_EMBEDS,
