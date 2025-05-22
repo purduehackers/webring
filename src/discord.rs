@@ -1,9 +1,8 @@
 //! Send messages to members over Discord
 //!
-//! Uses [Discord's webhook feature][webhook-api-ref].[^webhook]
+//! Uses [Discord's webhook feature][webhook-api-ref].
 //!
 //! [webhook-api-ref]: https://discord.com/developers/docs/resources/webhook#execute-webhook
-//! [^webhook]: Note lakjdf
 
 use std::{fmt::Display, str::FromStr, time::Duration};
 
