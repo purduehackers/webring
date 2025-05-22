@@ -49,6 +49,7 @@ pub fn create_router(cli: &CliOptions) -> Router<Arc<Webring>> {
             get(async || NoContent).layer(CorsLayer::new().allow_origin(Any)),
         )
         .route("/", get(serve_index))
+        .route("/visit", get(serve_visit))
         .route("/next", get(serve_next))
         // Support /prev and /previous as aliases of each other
         .route("/prev", get(serve_previous))
@@ -94,6 +95,29 @@ async fn serve_index(
     let maybe_origin = get_origin_from_request(headers, params).ok();
     webring.track_to_homepage_click(maybe_origin.as_ref(), addr.ip());
     Ok(Html(webring.homepage().await?.to_html().to_owned()).into_response())
+}
+
+async fn serve_visit(
+    State(webring): State<Arc<Webring>>,
+    Query(mut params): Query<HashMap<String, String>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> Result<Response, RouteError> {
+    let uri = match params.remove("member") {
+        Some(str) => match str.parse::<Uri>() {
+            Ok(uri) => uri,
+            Err(e) => {
+                return Err(RouteError::InvalidRedirectURI {
+                    uri: str,
+                    reason: e,
+                });
+            }
+        },
+        None => return Err(RouteError::MissingRedirectURI),
+    };
+
+    let actual_uri = webring.track_from_homepage_click(&uri, addr.ip())?;
+
+    Ok(Redirect::to(&actual_uri.to_string()).into_response())
 }
 
 /// Serve the `/next` endpoint.
@@ -239,8 +263,18 @@ enum RouteError {
         place: OriginUriLocation,
     },
 
+    #[error(r#"Redirect URI "{uri}" is invalid: {reason}."#)]
+    InvalidRedirectURI {
+        uri: String,
+        #[source]
+        reason: InvalidUri,
+    },
+
     #[error("Request doesn't indicate which site it originates from.")]
     MissingOriginURI,
+
+    #[error("Request doesn't indicate which site it it is redirecting to.")]
+    MissingRedirectURI,
 
     #[error("{0} contains data which is not valid UTF-8.")]
     HeaderToStr(OriginUriLocation),
@@ -276,7 +310,9 @@ impl IntoResponse for RouteError {
                 TraverseWebringError::NoAuthority(_) | TraverseWebringError::AuthorityNotFound(_),
             )
             | RouteError::InvalidOriginURI { .. }
+            | RouteError::InvalidRedirectURI { .. }
             | RouteError::MissingOriginURI
+            | RouteError::MissingRedirectURI
             | RouteError::HeaderToStr(_) => StatusCode::BAD_REQUEST,
             RouteError::RenderHomepage(_) => StatusCode::INTERNAL_SERVER_ERROR,
             RouteError::NoRoute(_) | RouteError::FileNotFound(_) => StatusCode::NOT_FOUND,

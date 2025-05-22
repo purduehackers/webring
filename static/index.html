@@ -37,7 +37,7 @@
 					{% for member in members -%}
 						<tr>
 							<td>{{ member.name }}</td>
-							<td><a href="{{ member.website.href }}">{{ member.website.authority }}{%- if member.website.path_and_query != "/" -%}
+							<td><a href="{{ base_addr.scheme }}://{{ base_addr.authority }}{{ base_addr.path_and_query }}visit?member={{ member.website.authority }}">{{ member.website.authority }}{%- if member.website.path_and_query != "/" -%}
 								{{ member.website.path_and_query }}
 							{%- endif %}</a></td>
 						</tr>
