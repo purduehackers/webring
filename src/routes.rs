@@ -621,6 +621,71 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         drop(tmpfiles);
     }
 
+    #[tokio::test]
+    async fn next() {
+        let (router, _, tmpfiles) = app().await;
+
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/next?host=clementine.viridian.page")
+                    .extension(ConnectInfo("5.4.3.2:80".parse::<SocketAddr>().unwrap()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res.headers().get("location").unwrap(),
+            "ws://refuse-the-r.ing/"
+        );
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+        drop(tmpfiles);
+    }
+
+    #[tokio::test]
+    async fn prev() {
+        let (router, _, tmpfiles) = app().await;
+
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/prev?host=https://clementine.viridian.page")
+                    .header("Referer", "kasad.com")
+                    .extension(ConnectInfo("5.4.3.2:80".parse::<SocketAddr>().unwrap()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.headers().get("location").unwrap(), "kasad.com");
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+        drop(tmpfiles);
+    }
+
+    #[tokio::test]
+    async fn previous() {
+        let (router, _, tmpfiles) = app().await;
+
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/previous")
+                    .header("Referer", "kasad.com")
+                    .extension(ConnectInfo("5.4.3.2:80".parse::<SocketAddr>().unwrap()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.headers().get("location").unwrap(), "hrovnyak.gitlab.io");
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+        drop(tmpfiles);
+    }
+
     fn i(str: &str) -> Intern<str> {
         Intern::from_ref(str)
     }
