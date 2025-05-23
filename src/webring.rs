@@ -84,22 +84,6 @@ pub struct Webring {
     stats: Arc<Stats>,
 }
 
-// Change this if Henry figures out how to make a sensible `Default` implementation for `Intern<*something unsized*>` in sarlacc
-impl Default for Webring {
-    fn default() -> Self {
-        Webring {
-            inner: RwLock::default(),
-            homepage: tokio::sync::RwLock::default(),
-            members_file_path: PathBuf::default(),
-            static_dir_path: PathBuf::default(),
-            file_watcher: OnceLock::new(),
-            base_address: Intern::default(),
-            base_authority: Intern::from_ref("ring.purduehacker.com"),
-            stats: Arc::default(),
-        }
-    }
-}
-
 impl Webring {
     /// Create a webring by parsing the file at the given path.
     pub async fn new(
@@ -563,7 +547,7 @@ mod tests {
         collections::{HashMap, HashSet},
         path::PathBuf,
         sync::{
-            Arc,
+            Arc, OnceLock, RwLock,
             atomic::{AtomicBool, Ordering},
         },
         time::Duration,
@@ -580,6 +564,22 @@ mod tests {
     };
 
     use super::{Member, TraverseWebringError};
+
+    // Change this if Henry figures out how to make a sensible `Default` implementation for `Intern<*something unsized*>` in sarlacc
+    impl Default for Webring {
+        fn default() -> Self {
+            Webring {
+                inner: RwLock::default(),
+                homepage: tokio::sync::RwLock::default(),
+                members_file_path: PathBuf::default(),
+                static_dir_path: PathBuf::default(),
+                file_watcher: OnceLock::new(),
+                base_address: Intern::default(),
+                base_authority: Intern::from_ref("ring.purduehackers.com"),
+                stats: Arc::default(),
+            }
+        }
+    }
 
     impl PartialEq for Member {
         fn eq(&self, other: &Self) -> bool {
