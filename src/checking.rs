@@ -243,13 +243,13 @@ impl Display for MissingLinks {
         let address = address_string.strip_suffix('/').unwrap_or(&address_string);
         writeln!(f, "Your site is missing the following links:")?;
         if self.home {
-            writeln!(f, "- {address}")?;
+            writeln!(f, "- <{address}>")?;
         }
         if self.next {
-            writeln!(f, "- {address}/next")?;
+            writeln!(f, "- <{address}/next>")?;
         }
         if self.prev {
-            writeln!(f, "- {address}/prev")?;
+            writeln!(f, "- <{address}/prev>")?;
         }
 
         writeln!(
