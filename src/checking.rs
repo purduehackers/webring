@@ -52,14 +52,26 @@ async fn is_online() -> bool {
         return ping_info.1;
     }
 
-    // Ping something
-    let status = surge_ping::ping("8.8.8.8".parse().unwrap(), &[0; 8]).await;
+    // Ping something.
+    // Pings don't work in GitHub Actions runners, so if we're running in GH Actions, just pretend
+    // our ping succeeded, since we know we're online. We do this check only in non-release builds
+    // so we don't incur the runtime cost of checking the environment variable repeatedly. We don't
+    // just check at compile time because we may want to build binaries on GH Actions in the
+    // future.
+    let ping_successful = if cfg!(debug_assertions)
+        && std::env::var("GITHUB_ACTIONS").is_ok_and(|val| &val == "true")
+    {
+        true
+    } else {
+        let result = surge_ping::ping("8.8.8.8".parse().unwrap(), &[0; 8]).await;
+        result.is_ok()
+    };
 
     // Write the info
     let now = Utc::now().timestamp_millis();
-    *ping_info = (now, status.is_ok());
+    *ping_info = (now, ping_successful);
 
-    ping_info.1
+    ping_successful
 }
 
 /// Checks whether a given URL passes the given check level.
