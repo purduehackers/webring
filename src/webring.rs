@@ -36,7 +36,7 @@ pub enum CheckLevel {
 struct Member {
     name: String,
     website: Intern<Uri>,
-    authority: Intern<str>,
+    authority: Intern<Authority>,
     #[allow(dead_code)]
     discord_id: String,
     check_level: CheckLevel,
@@ -64,7 +64,7 @@ impl Member {
 
 #[derive(Clone, Debug, Default)]
 struct WebringData {
-    members_table: HashMap<Intern<str>, usize>,
+    members_table: HashMap<Intern<Authority>, usize>,
     ordering: Vec<Member>,
 }
 
@@ -80,7 +80,7 @@ pub struct Webring {
     static_dir_path: PathBuf,
     file_watcher: OnceLock<RecommendedWatcher>,
     base_address: Intern<Uri>,
-    base_authority: Intern<str>,
+    base_authority: Intern<Authority>,
     stats: Arc<Stats>,
 }
 
@@ -102,14 +102,9 @@ impl Webring {
             stats: Arc::new(stats),
             file_watcher: OnceLock::default(),
             base_address,
-            base_authority: Intern::from_ref(
-                base_address
-                    .authority()
-                    .ok_or_eyre(
-                        "The base address does not include an authority component (is relative)",
-                    )?
-                    .as_str(),
-            ),
+            base_authority: Intern::from_ref(base_address.authority().ok_or_eyre(
+                "The base address does not include an authority component (is relative)",
+            )?),
         };
 
         webring.check_members().await?;
@@ -169,18 +164,19 @@ impl Webring {
         ret
     }
 
-    fn get_authority(uri: &Uri) -> Result<Intern<str>, TraverseWebringError> {
+    fn get_authority(uri: &Uri) -> Result<Intern<Authority>, TraverseWebringError> {
         let authority = uri
             .authority()
             .ok_or_else(|| TraverseWebringError::NoAuthority(uri.to_owned()))?;
-        Intern::get_ref(authority.as_str())
+        Intern::get_ref(authority)
             .ok_or_else(|| TraverseWebringError::AuthorityNotFound(authority.to_owned()))
     }
 
     fn member_idx_and_lock(
         &self,
         uri: &Uri,
-    ) -> Result<(usize, Intern<str>, RwLockReadGuard<'_, WebringData>), TraverseWebringError> {
+    ) -> Result<(usize, Intern<Authority>, RwLockReadGuard<'_, WebringData>), TraverseWebringError>
+    {
         let interned = Self::get_authority(uri)?;
         let inner = self.inner.read().unwrap();
         Ok((
@@ -442,11 +438,7 @@ impl Webring {
     }
 
     #[cfg(test)]
-    pub fn assert_stat_entry(
-        &self,
-        entry: (chrono::NaiveDate, Intern<str>, Intern<str>, Intern<str>),
-        count: u64,
-    ) {
+    pub fn assert_stat_entry(&self, entry: (chrono::NaiveDate, &str, &str, &str), count: u64) {
         self.stats.assert_stat_entry(entry, count);
     }
 }
@@ -508,7 +500,7 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
         let uri = split[1].parse::<Uri>()?;
 
         let authority = match uri.authority() {
-            Some(v) => Intern::from_ref(v.as_str()),
+            Some(v) => Intern::from_ref(v),
             None => return Err(eyre!("URLs must not be relative. Got: {uri}")),
         };
 
@@ -565,7 +557,7 @@ mod tests {
 
     use super::{Member, TraverseWebringError};
 
-    // Change this if Henry figures out how to make a sensible `Default` implementation for `Intern<*something unsized*>` in sarlacc
+    // `Authority` has no `Default` impl so we have to do it manually
     impl Default for Webring {
         fn default() -> Self {
             Webring {
@@ -575,7 +567,7 @@ mod tests {
                 static_dir_path: PathBuf::default(),
                 file_watcher: OnceLock::new(),
                 base_address: Intern::default(),
-                base_authority: Intern::from_ref("ring.purduehackers.com"),
+                base_authority: Intern::new("ring.purduehackers.com".parse().unwrap()),
                 stats: Arc::default(),
             }
         }
@@ -645,10 +637,10 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             let inner = webring.inner.read().unwrap();
 
             let mut expected_table = HashMap::new();
-            expected_table.insert(Intern::from_ref("hrovnyak.gitlab.io"), 0);
-            expected_table.insert(Intern::from_ref("kasad.com"), 1);
-            expected_table.insert(Intern::from_ref("clementine.viridian.page"), 2);
-            expected_table.insert(Intern::from_ref("refuse-the-r.ing"), 3);
+            expected_table.insert(Intern::new("hrovnyak.gitlab.io".parse().unwrap()), 0);
+            expected_table.insert(Intern::new("kasad.com".parse().unwrap()), 1);
+            expected_table.insert(Intern::new("clementine.viridian.page".parse().unwrap()), 2);
+            expected_table.insert(Intern::new("refuse-the-r.ing".parse().unwrap()), 3);
 
             assert_eq!(inner.members_table, expected_table);
 
@@ -656,7 +648,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                 Member {
                     name: "henry".to_owned(),
                     website: Intern::new(Uri::from_static("hrovnyak.gitlab.io")),
-                    authority: Intern::from_ref("hrovnyak.gitlab.io"),
+                    authority: Intern::new("hrovnyak.gitlab.io".parse().unwrap()),
                     discord_id: "123".to_owned(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
@@ -664,7 +656,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                 Member {
                     name: "kian".to_owned(),
                     website: Intern::new(Uri::from_static("kasad.com")),
-                    authority: Intern::from_ref("kasad.com"),
+                    authority: Intern::new("kasad.com".parse().unwrap()),
                     discord_id: "456".to_owned(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
@@ -672,7 +664,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                 Member {
                     name: "cynthia".to_owned(),
                     website: Intern::new(Uri::from_static("https://clementine.viridian.page")),
-                    authority: Intern::from_ref("clementine.viridian.page"),
+                    authority: Intern::new("clementine.viridian.page".parse().unwrap()),
                     discord_id: "789".to_owned(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
@@ -680,7 +672,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                 Member {
                     name: "???".to_owned(),
                     website: Intern::new(Uri::from_static("ws://refuse-the-r.ing")),
-                    authority: Intern::from_ref("refuse-the-r.ing"),
+                    authority: Intern::new("refuse-the-r.ing".parse().unwrap()),
                     discord_id: "bruh".to_owned(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
@@ -698,9 +690,9 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         webring.assert_stat_entry(
             (
                 today,
-                Intern::from_ref("hrovnyak.gitlab.io"),
-                Intern::from_ref("kasad.com"),
-                Intern::from_ref("hrovnyak.gitlab.io"),
+                "hrovnyak.gitlab.io",
+                "kasad.com",
+                "hrovnyak.gitlab.io",
             ),
             1,
         );
@@ -712,9 +704,9 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         webring.assert_stat_entry(
             (
                 today,
-                Intern::from_ref("hrovnyak.gitlab.io"),
-                Intern::from_ref("refuse-the-r.ing"),
-                Intern::from_ref("hrovnyak.gitlab.io"),
+                "hrovnyak.gitlab.io",
+                "refuse-the-r.ing",
+                "hrovnyak.gitlab.io",
             ),
             1,
         );
@@ -890,9 +882,9 @@ kian — kasad.com — 456 — NonE
         webring.assert_stat_entry(
             (
                 today,
-                *UNKNOWN_ORIGIN,
-                Intern::from_ref("kasad.com"),
-                *UNKNOWN_ORIGIN,
+                UNKNOWN_ORIGIN.as_str(),
+                "kasad.com",
+                UNKNOWN_ORIGIN.as_str(),
             ),
             1,
         );
@@ -932,9 +924,9 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         webring.assert_stat_entry(
             (
                 today,
-                Intern::from_ref("clementine.viridian.page"),
-                Intern::from_ref("kasad.com"),
-                Intern::from_ref("clementine.viridian.page"),
+                "clementine.viridian.page",
+                "kasad.com",
+                "clementine.viridian.page",
             ),
             1,
         );
