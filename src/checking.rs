@@ -38,7 +38,7 @@ async fn is_online() -> bool {
         // Has it been checked within the TTL?
         let ping_info = PING_INFO.read().await;
         let now = Utc::now().timestamp_millis();
-        if now < ping_info.0 + 1000 {
+        if now < ping_info.0 + ONLINE_CHECK_TTL_MS {
             return ping_info.1;
         }
     }
