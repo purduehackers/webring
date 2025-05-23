@@ -172,8 +172,10 @@ async fn main() -> ExitCode {
         const SITE_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 5);
         let webring_for_task = Arc::clone(&webring);
         tokio::spawn(async move {
-            webring_for_task.check_members().await;
-            tokio::time::sleep(SITE_CHECK_INTERVAL).await;
+            loop {
+                webring_for_task.check_members().await;
+                tokio::time::sleep(SITE_CHECK_INTERVAL).await;
+            }
         });
     }
 
