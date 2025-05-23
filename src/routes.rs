@@ -521,12 +521,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         assert_eq!("Hello homepage!", text);
         assert_eq!(status, StatusCode::OK);
         webring.assert_stat_entry(
-            (
-                today,
-                i("kasad.com"),
-                i("ring.purduehackers.com"),
-                i("kasad.com"),
-            ),
+            (today, "kasad.com", "ring.purduehackers.com", "kasad.com"),
             1,
         );
 
@@ -558,9 +553,9 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         webring.assert_stat_entry(
             (
                 today,
-                *UNKNOWN_ORIGIN,
-                i("ring.purduehackers.com"),
-                *UNKNOWN_ORIGIN,
+                UNKNOWN_ORIGIN.as_str(),
+                "ring.purduehackers.com",
+                UNKNOWN_ORIGIN.as_str(),
             ),
             1,
         );
@@ -592,9 +587,9 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         webring.assert_stat_entry(
             (
                 today,
-                i("ring.purduehackers.com"),
-                i("clementine.viridian.page"),
-                i("ring.purduehackers.com"),
+                "ring.purduehackers.com",
+                "clementine.viridian.page",
+                "ring.purduehackers.com",
             ),
             1,
         );
@@ -684,9 +679,5 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
         drop(tmpfiles);
-    }
-
-    fn i(str: &str) -> Intern<str> {
-        Intern::from_ref(str)
     }
 }

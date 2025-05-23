@@ -10,6 +10,7 @@ use std::{
     },
 };
 
+use axum::http::uri::Authority;
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, Utc};
 use log::info;
 use papaya::HashMap;
@@ -18,19 +19,28 @@ use sarlacc::Intern;
 const IP_TRACKING_TTL: chrono::TimeDelta = Duration::days(1);
 pub const TIMEZONE: chrono::FixedOffset = FixedOffset::west_opt(5 * 3600).unwrap();
 
-pub static UNKNOWN_ORIGIN: LazyLock<Intern<str>> = LazyLock::new(|| Intern::from_ref("unknown"));
+pub static UNKNOWN_ORIGIN: LazyLock<Intern<Authority>> =
+    LazyLock::new(|| Intern::new("unknown".parse().unwrap()));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct IpInfo {
     last_seen: DateTime<Utc>,
-    started_from: Intern<str>,
+    started_from: Intern<Authority>,
 }
 
 #[derive(Debug, Default)]
 struct AggregatedStats {
     // (Date (with timezone `TIMEZONE`), From, To, Started From) → Count
     #[expect(clippy::type_complexity)]
-    counters: HashMap<(NaiveDate, Intern<str>, Intern<str>, Intern<str>), AtomicU64>,
+    counters: HashMap<
+        (
+            NaiveDate,
+            Intern<Authority>,
+            Intern<Authority>,
+            Intern<Authority>,
+        ),
+        AtomicU64,
+    >,
 }
 
 #[derive(Debug, Default)]
@@ -47,11 +57,17 @@ impl Stats {
         }
     }
 
-    pub fn redirected(&self, ip: IpAddr, from: Intern<str>, to: Intern<str>) {
+    pub fn redirected(&self, ip: IpAddr, from: Intern<Authority>, to: Intern<Authority>) {
         self.redirected_impl(ip, from, to, Utc::now());
     }
 
-    fn redirected_impl(&self, ip: IpAddr, from: Intern<str>, to: Intern<str>, now: DateTime<Utc>) {
+    fn redirected_impl(
+        &self,
+        ip: IpAddr,
+        from: Intern<Authority>,
+        to: Intern<Authority>,
+        now: DateTime<Utc>,
+    ) {
         let ip_info = *self.ip_tracking.pin().update_or_insert(
             ip,
             |ip_info| {
@@ -89,27 +105,29 @@ impl Stats {
     }
 
     #[cfg(test)]
-    pub fn assert_stat_entry(
-        &self,
-        entry: (NaiveDate, Intern<str>, Intern<str>, Intern<str>),
-        count: u64,
-    ) {
+    pub fn assert_stat_entry(&self, entry: (NaiveDate, &str, &str, &str), count: u64) {
         assert_eq!(
             self.aggregated
                 .counters
                 .pin()
-                .get(&entry)
+                .get(&(
+                    entry.0,
+                    Intern::new(entry.1.parse::<Authority>().unwrap()),
+                    Intern::new(entry.2.parse::<Authority>().unwrap()),
+                    Intern::new(entry.3.parse::<Authority>().unwrap()),
+                ))
                 .map_or(0, |v| v.load(Ordering::Relaxed)),
             count,
-            "{self:#?}"
+            "{self:#?}\n{entry:?}"
         );
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{net::IpAddr, sync::atomic::Ordering};
+    use std::net::IpAddr;
 
+    use axum::http::uri::Authority;
     use chrono::{DateTime, Duration, NaiveDate, Utc};
     use sarlacc::Intern;
 
@@ -121,8 +139,8 @@ mod tests {
         addr.parse().unwrap()
     }
 
-    fn i(str: &str) -> Intern<str> {
-        Intern::from_ref(str)
+    fn i(str: &str) -> Intern<Authority> {
+        Intern::new(str.parse().unwrap())
     }
 
     fn t(timestamp: i64) -> DateTime<Utc> {
@@ -131,17 +149,6 @@ mod tests {
 
     fn d(timestamp: i64) -> NaiveDate {
         t(timestamp).with_timezone(&TIMEZONE).date_naive()
-    }
-
-    impl Stats {
-        fn g(&self, timestamp: i64, from: &str, to: &str, started_from: &str) -> u64 {
-            self.aggregated
-                .counters
-                .pin()
-                .get(&(d(timestamp), i(from), i(to), i(started_from)))
-                .unwrap()
-                .load(Ordering::Relaxed)
-        }
     }
 
     #[tokio::test]
@@ -156,10 +163,10 @@ mod tests {
         stats.redirected_impl(a("1.0.0.0"), i("homepage.com"), i("c.com"), t(3));
 
         assert_eq!(stats.aggregated.counters.len(), 4);
-        assert_eq!(stats.g(0, "a.com", "b.com", "a.com"), 2);
-        assert_eq!(stats.g(0, "b.com", "c.com", "a.com"), 1);
-        assert_eq!(stats.g(0, "b.com", "homepage.com", "a.com"), 1);
-        assert_eq!(stats.g(0, "homepage.com", "c.com", "a.com"), 1);
+        stats.assert_stat_entry((d(0), "a.com", "b.com", "a.com"), 2);
+        stats.assert_stat_entry((d(0), "b.com", "c.com", "a.com"), 1);
+        stats.assert_stat_entry((d(0), "b.com", "homepage.com", "a.com"), 1);
+        stats.assert_stat_entry((d(0), "homepage.com", "c.com", "a.com"), 1);
 
         let tracking = stats.ip_tracking.pin();
         assert_eq!(tracking.len(), 2);
@@ -198,11 +205,12 @@ mod tests {
         stats.redirected_impl(a("0.0.0.0"), i("c.com"), i("a.com"), t(2) + day);
 
         assert_eq!(stats.aggregated.counters.len(), 6);
-        assert_eq!(stats.g(0, "a.com", "b.com", "a.com"), 2);
-        assert_eq!(stats.g(0, "b.com", "c.com", "a.com"), 1);
-        assert_eq!(stats.g(0, "b.com", "homepage.com", "a.com"), 1);
-        assert_eq!(stats.g(0, "homepage.com", "c.com", "a.com"), 1);
-        assert_eq!(stats.g(day.num_seconds(), "b.com", "c.com", "b.com"), 1);
-        assert_eq!(stats.g(day.num_seconds(), "c.com", "a.com", "b.com"), 1);
+        stats.assert_stat_entry((d(0), "a.com", "b.com", "a.com"), 2);
+        stats.assert_stat_entry((d(0), "b.com", "c.com", "a.com"), 1);
+        stats.assert_stat_entry((d(0), "b.com", "homepage.com", "a.com"), 1);
+        stats.assert_stat_entry((d(0), "homepage.com", "c.com", "a.com"), 1);
+        stats.assert_stat_entry((d(day.num_seconds()), "b.com", "c.com", "b.com"), 1);
+        stats.assert_stat_entry((d(day.num_seconds()), "b.com", "c.com", "b.com"), 1);
+        stats.assert_stat_entry((d(day.num_seconds()), "c.com", "a.com", "b.com"), 1);
     }
 }
