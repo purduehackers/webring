@@ -1,0 +1,10 @@
+[webring]
+members-file = "members.txt"
+static-dir = "static"
+base-url = "https://ring.purduehackers.com"
+
+[network]
+listen-addr = "0.0.0.0:3000"
+
+[logging]
+verbosity = "info"

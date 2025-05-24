@@ -3,6 +3,7 @@ name = "ph-webring"
 version = "0.0.0"
 description = "Purdue Hackers' webring server"
 repository = "https://github.com/purduehackers/webring"
+homepage = "https://ring.purduehackers.com"
 authors = [
     "Kian Kasad <kian@kasad.com>",
     "Henry Rovnyak <h.rovnyak@proton.me>",
@@ -24,7 +25,7 @@ eyre = "0.6.12"
 ftail = "0.3.0"
 futures = "0.3.31"
 html-escape = "0.2.13"
-log = "0.4.27"
+log = { version = "0.4.27", features = ["serde"] }
 lol_html = "2.4.0"
 notify = "8.0.0"
 papaya = { version = "0.2.1", features = ["serde"] }
@@ -39,6 +40,7 @@ tera = "1.20.0"
 thiserror = "2.0.12"
 tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread"] }
 tokio-util = { version = "0.7.15", features = ["io"] }
+toml = "0.8.22"
 tower-http = { version = "0.6.4", features = ["cors", "fs", "catch-panic"] }
 
 [dev-dependencies]
