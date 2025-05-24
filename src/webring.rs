@@ -1,53 +1,46 @@
 use std::{
     collections::HashMap,
     net::IpAddr,
-    path::{Path, PathBuf},
-    str::FromStr,
+    path::PathBuf,
     sync::{
-        Arc, OnceLock, RwLock, RwLockReadGuard,
+        Arc, RwLock, RwLockReadGuard,
         atomic::{AtomicBool, Ordering},
     },
 };
 
 use axum::http::{Uri, uri::Authority};
 use chrono::TimeDelta;
-use eyre::{Context, OptionExt, bail, eyre};
 use futures::{StreamExt, stream::FuturesUnordered};
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use indexmap::IndexMap;
 use rand::seq::SliceRandom;
 
-use log::{debug, error, info, warn};
+use log::{error, warn};
 use sarlacc::Intern;
+use serde::Deserialize;
 use thiserror::Error;
 
 use crate::{
     checking::{CheckFailure, check},
+    config::{Config, MemberSpec},
     discord::{DiscordNotifier, Snowflake},
     homepage::{Homepage, MemberForHomepage},
     stats::{Stats, UNKNOWN_ORIGIN},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum CheckLevel {
     None,
+    #[serde(rename = "online")]
     JustOnline,
+    #[serde(rename = "links", alias = "full")]
     ForLinks,
 }
 
-impl FromStr for CheckLevel {
-    type Err = eyre::Report;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s.to_lowercase().as_str() {
-            "links" => CheckLevel::ForLinks,
-            "online" => CheckLevel::JustOnline,
-            "none" => CheckLevel::None,
-            _ => {
-                bail!(
-                    "Expected the check level to be one of {{\"links\", \"online\", \"none\"}}. Got \"{s}\""
-                );
-            }
-        })
+impl Default for CheckLevel {
+    /// Default check level for a member if none is specified in the configuration
+    fn default() -> Self {
+        CheckLevel::ForLinks
     }
 }
 
@@ -59,6 +52,19 @@ struct Member {
     discord_id: Option<Snowflake>,
     check_level: CheckLevel,
     check_successful: Arc<AtomicBool>,
+}
+
+impl From<(&str, &MemberSpec)> for Member {
+    fn from((name, spec): (&str, &MemberSpec)) -> Self {
+        Self {
+            name: name.to_owned(),
+            website: spec.uri(),
+            authority: Intern::from_ref(spec.uri().authority().unwrap()),
+            discord_id: spec.discord_id,
+            check_level: spec.check_level,
+            check_successful: Arc::new(AtomicBool::new(true)),
+        }
+    }
 }
 
 impl Member {
@@ -99,6 +105,25 @@ struct WebringData {
     ordering: Vec<Member>,
 }
 
+impl From<&IndexMap<String, MemberSpec>> for WebringData {
+    fn from(value: &IndexMap<String, MemberSpec>) -> Self {
+        let mut members_table = HashMap::with_capacity(value.len());
+        let mut ordering = Vec::with_capacity(value.len());
+
+        for (name, spec) in value {
+            let authority = Intern::new(spec.uri().authority().unwrap().clone());
+            ordering.push(Member::from((name.as_str(), spec)));
+            let index = ordering.len() - 1;
+            members_table.insert(authority, index);
+        }
+
+        Self {
+            members_table,
+            ordering,
+        }
+    }
+}
+
 /// The data structure underlying a webring. Implements the core webring functionality.
 #[derive(Debug)]
 pub struct Webring {
@@ -107,9 +132,8 @@ pub struct Webring {
     inner: RwLock<WebringData>,
     // This one we would like to hold across awaits
     homepage: tokio::sync::RwLock<Option<Arc<Homepage>>>,
-    members_file_path: PathBuf,
     static_dir_path: PathBuf,
-    file_watcher: OnceLock<RecommendedWatcher>,
+    // file_watcher: OnceLock<RecommendedWatcher>,
     base_address: Intern<Uri>,
     base_authority: Intern<Authority>,
     notifier: Option<Arc<DiscordNotifier>>,
@@ -121,36 +145,30 @@ impl Webring {
     ///
     /// The members' `check_successful` fields will be initialized to `true` until a check is
     /// performed using [`check_members()`][Self::check_members].
-    pub async fn new(
-        members_file: PathBuf,
-        static_dir: PathBuf,
-        base_address: Intern<Uri>,
-        notifier: Option<DiscordNotifier>,
-    ) -> eyre::Result<Webring> {
-        let stats = Stats::new();
-        let webring_data = parse_file(&members_file).await?;
-
-        Ok(Webring {
-            inner: RwLock::new(webring_data),
-            members_file_path: members_file,
-            static_dir_path: static_dir,
+    pub fn new(config: &Config) -> Webring {
+        Webring {
+            inner: RwLock::new(WebringData::from(&config.members)),
+            static_dir_path: config.webring.static_dir.clone(),
             homepage: tokio::sync::RwLock::new(None),
-            stats: Arc::new(stats),
-            file_watcher: OnceLock::default(),
-            base_address,
-            notifier: notifier.map(Arc::new),
-            base_authority: Intern::from_ref(base_address.authority().ok_or_eyre(
-                "The base address does not include an authority component (is relative)",
-            )?),
-        })
+            stats: Arc::new(Stats::new()),
+            // file_watcher: OnceLock::default(),
+            base_address: config.webring.base_url(),
+            notifier: config
+                .discord
+                .as_ref()
+                .map(|dt| &dt.webhook_url)
+                .map(DiscordNotifier::new)
+                .map(Arc::new),
+            base_authority: Intern::from_ref(config.webring.base_url().authority().unwrap()),
+        }
     }
 
-    /// Update the webring in-place by re-parsing the file given in the original `new` call, and
-    /// invalidating the cache of the SSR'ed homepage. All new URLs are checked.
+    /// Update the webring's members in-place and invalidate the cache of the SSR'ed homepage.
+    /// All new URLs are checked.
     ///
     /// Useful for updating the webring without restarting the server.
-    pub async fn update_from_file_and_check(&self) -> eyre::Result<()> {
-        let mut new_members = parse_file(&self.members_file_path).await?;
+    pub async fn update_members_and_check(&self, member_specs: &IndexMap<String, MemberSpec>) {
+        let mut new_members = WebringData::from(member_specs);
         let mut tasks = FuturesUnordered::new();
 
         {
@@ -180,7 +198,6 @@ impl Webring {
 
         *self.inner.write().unwrap() = new_members;
         *self.homepage.write().await = None;
-        Ok(())
     }
 
     /// Query everyone's webpages and check them according to their respective check levels.
@@ -385,81 +402,81 @@ impl Webring {
         }
     }
 
-    /// Enable automatic reloading
-    ///
-    /// After calling this method, the `Webring`'s data will automatically be reloaded when the
-    /// members file is changed. Similarly, the homepage will be invalidated when the template file
-    /// is changed.
-    ///
-    /// This function must be called from a tokio runtime.
-    pub fn enable_reloading(self: &Arc<Self>) -> eyre::Result<()> {
-        let rt = tokio::runtime::Handle::current();
-        let homepage_template_path = self.static_dir_path.join("index.html");
-        let weak_webring = Arc::downgrade(self);
-        let homepage_template_path_for_closure = homepage_template_path.clone();
-        let mut watcher =
-            notify::recommended_watcher(move |maybe_event: notify::Result<notify::Event>| {
-                // We can upgrade because if the webring was dropped, this watcher would be
-                // deregistered and thus we wouldn't be here.
-                let webring = weak_webring.upgrade().unwrap();
-                match maybe_event {
-                    Ok(event) => {
-                        debug!(
-                            "Event observed on {}: {event:#?}",
-                            webring.members_file_path.display()
-                        );
-                        if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
-                            return;
-                        }
-
-                        for path in event.paths {
-                            if same_file::is_same_file(&path, &webring.members_file_path)
-                                .unwrap_or_else(|err| {
-                                    log::error!("Error comparing file paths: {err}");
-                                    false
-                                })
-                            {
-                                info!(
-                                    "Detected change to {}. Reloading webring.",
-                                    webring.members_file_path.display()
-                                );
-                                let webring_for_task = Arc::clone(&webring);
-                                rt.spawn(async move {
-                                    if let Err(err) =
-                                        webring_for_task.update_from_file_and_check().await
-                                    {
-                                        error!("Failed to update webring: {err}");
-                                    }
-                                    info!("Webring reloaded");
-                                });
-                            }
-                            if same_file::is_same_file(&path, &homepage_template_path_for_closure)
-                                .unwrap_or_else(|err| {
-                                    log::error!("Error comparing file paths: {err}");
-                                    false
-                                })
-                            {
-                                info!(
-                                    "Detected change to {}. Invalidating homepage.",
-                                    homepage_template_path_for_closure.display()
-                                );
-                                let webring_for_task = Arc::clone(&webring);
-                                rt.spawn(async move {
-                                    webring_for_task.homepage.write().await.take();
-                                });
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        error!("Error watching file: {err}");
-                    }
-                }
-            })?;
-        watcher.watch(&self.members_file_path, RecursiveMode::NonRecursive)?;
-        watcher.watch(&homepage_template_path, RecursiveMode::NonRecursive)?;
-        let _ = self.file_watcher.set(watcher);
-        Ok(())
-    }
+    // /// Enable automatic reloading
+    // ///
+    // /// After calling this method, the `Webring`'s data will automatically be reloaded when the
+    // /// members file is changed. Similarly, the homepage will be invalidated when the template file
+    // /// is changed.
+    // ///
+    // /// This function must be called from a tokio runtime.
+    // pub fn enable_reloading(self: &Arc<Self>) -> eyre::Result<()> {
+    //     let rt = tokio::runtime::Handle::current();
+    //     let homepage_template_path = self.static_dir_path.join("index.html");
+    //     let weak_webring = Arc::downgrade(self);
+    //     let homepage_template_path_for_closure = homepage_template_path.clone();
+    //     let mut watcher =
+    //         notify::recommended_watcher(move |maybe_event: notify::Result<notify::Event>| {
+    //             // We can upgrade because if the webring was dropped, this watcher would be
+    //             // deregistered and thus we wouldn't be here.
+    //             let webring = weak_webring.upgrade().unwrap();
+    //             match maybe_event {
+    //                 Ok(event) => {
+    //                     debug!(
+    //                         "Event observed on {}: {event:#?}",
+    //                         webring.members_file_path.display()
+    //                     );
+    //                     if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+    //                         return;
+    //                     }
+    //
+    //                     for path in event.paths {
+    //                         if same_file::is_same_file(&path, &webring.members_file_path)
+    //                             .unwrap_or_else(|err| {
+    //                                 log::error!("Error comparing file paths: {err}");
+    //                                 false
+    //                             })
+    //                         {
+    //                             info!(
+    //                                 "Detected change to {}. Reloading webring.",
+    //                                 webring.members_file_path.display()
+    //                             );
+    //                             let webring_for_task = Arc::clone(&webring);
+    //                             rt.spawn(async move {
+    //                                 if let Err(err) =
+    //                                     webring_for_task.update_members_and_check().await
+    //                                 {
+    //                                     error!("Failed to update webring: {err}");
+    //                                 }
+    //                                 info!("Webring reloaded");
+    //                             });
+    //                         }
+    //                         if same_file::is_same_file(&path, &homepage_template_path_for_closure)
+    //                             .unwrap_or_else(|err| {
+    //                                 log::error!("Error comparing file paths: {err}");
+    //                                 false
+    //                             })
+    //                         {
+    //                             info!(
+    //                                 "Detected change to {}. Invalidating homepage.",
+    //                                 homepage_template_path_for_closure.display()
+    //                             );
+    //                             let webring_for_task = Arc::clone(&webring);
+    //                             rt.spawn(async move {
+    //                                 webring_for_task.homepage.write().await.take();
+    //                             });
+    //                         }
+    //                     }
+    //                 }
+    //                 Err(err) => {
+    //                     error!("Error watching file: {err}");
+    //                 }
+    //             }
+    //         })?;
+    //     watcher.watch(&self.members_file_path, RecursiveMode::NonRecursive)?;
+    //     watcher.watch(&homepage_template_path, RecursiveMode::NonRecursive)?;
+    //     let _ = self.file_watcher.set(watcher);
+    //     Ok(())
+    // }
 
     /// Create a task that prunes IP addresses from the table at the given interval. Note that IPs will be pruned if they haven't been seen since `IP_TRACKING_TTL`.
     pub fn enable_ip_pruning(&self, interval: TimeDelta) {
@@ -486,58 +503,6 @@ impl Webring {
     }
 }
 
-async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
-    let file = tokio::fs::read_to_string(&path).await?;
-
-    let mut members = WebringData {
-        members_table: HashMap::new(),
-        ordering: Vec::new(),
-    };
-
-    for line in file.lines().filter(|line| !line.is_empty()) {
-        let split = line.split("—").map(str::trim).collect::<Vec<_>>();
-
-        if split.len() != 4 {
-            return Err(eyre!(
-                "Expected four parameters of the form `name — website — discord id — check level`. Got:\n\n{line}{}",
-                if line.contains(['-', '–']) {
-                    "\n\nHelp: Dashes are expected to be emdashes (—) to avoid clashing with regular dashes."
-                } else {
-                    ""
-                }
-            ));
-        }
-
-        let check_level = CheckLevel::from_str(split[3])?;
-
-        let uri = split[1].parse::<Uri>()?;
-
-        let authority = match uri.authority() {
-            Some(v) => Intern::from_ref(v),
-            None => return Err(eyre!("URLs must not be relative. Got: {uri}")),
-        };
-
-        let member = Member {
-            name: split[0].to_owned(),
-            website: Intern::new(uri),
-            authority,
-            discord_id: match split[2] {
-                "-" => None,
-                id => Some(id.parse().wrap_err("Discord ID is not valid")?),
-            },
-            check_level,
-            check_successful: Arc::new(AtomicBool::new(true)),
-        };
-
-        members
-            .members_table
-            .insert(authority, members.ordering.len());
-        members.ordering.push(member);
-    }
-
-    Ok(members)
-}
-
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum TraverseWebringError {
     #[error("The given origin URI ({0}) doesn't have a host component")]
@@ -555,19 +520,21 @@ mod tests {
         collections::{HashMap, HashSet},
         path::PathBuf,
         sync::{
-            Arc, OnceLock, RwLock,
+            Arc, RwLock,
             atomic::{AtomicBool, Ordering},
         },
-        time::Duration,
     };
 
     use axum::http::{Uri, uri::Authority};
     use chrono::Utc;
+    use indexmap::IndexMap;
+    use indoc::indoc;
     use pretty_assertions::assert_eq;
     use sarlacc::Intern;
-    use tempfile::{NamedTempFile, TempDir};
+    use tempfile::TempDir;
 
     use crate::{
+        config::{Config, MemberSpec},
         stats::{TIMEZONE, UNKNOWN_ORIGIN},
         webring::{CheckLevel, Webring},
     };
@@ -580,9 +547,8 @@ mod tests {
             Webring {
                 inner: RwLock::default(),
                 homepage: tokio::sync::RwLock::default(),
-                members_file_path: PathBuf::default(),
                 static_dir_path: PathBuf::default(),
-                file_watcher: OnceLock::new(),
+                // file_watcher: OnceLock::new(),
                 base_address: Intern::default(),
                 base_authority: Intern::new("ring.purduehackers.com".parse().unwrap()),
                 notifier: None,
@@ -626,31 +592,33 @@ mod tests {
         }
     }
 
+    fn make_config() -> Config {
+        let static_dir = TempDir::new().unwrap();
+        toml::from_str(&format!(
+            indoc! { r#"
+                [webring]
+                static-dir = "{}"
+                base-url = "https://ring.purduehackers.com"
+
+                [network]
+                listen-addr = "0.0.0.0:3000"
+
+                [members]
+                henry = {{ url = "hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }}
+                kian = {{ url = "kasad.com", discord-id = 456, check-level = "none" }}
+                cynthia = {{ url = "https://clementine.viridian.page", discord-id = 789, check-level = "none" }}
+                "???" = {{ url = "ws://refuse-the-r.ing", check-level = "none" }}
+            "# },
+            static_dir.path().display()
+        ))
+        .unwrap()
+    }
+
     #[expect(clippy::too_many_lines)]
     #[tokio::test]
     async fn test_webring() {
-        let members_file = NamedTempFile::new().unwrap();
-        tokio::fs::write(
-            members_file.path(),
-            "
-henry — hrovnyak.gitlab.io — 123 — None
-kian — kasad.com — 456 — NonE
-cynthia — https://clementine.viridian.page — 789 — nONE
-??? — ws://refuse-the-r.ing — - — none
-",
-        )
-        .await
-        .unwrap();
-        let static_dir = TempDir::new().unwrap();
-
-        let webring = Webring::new(
-            members_file.path().to_owned(),
-            static_dir.path().to_owned(),
-            Intern::new(Uri::from_static("https://ring.purduehackers.com")),
-            None,
-        )
-        .await
-        .unwrap();
+        let config = make_config();
+        let webring = Webring::new(&config);
 
         {
             let inner = webring.inner.read().unwrap();
@@ -812,20 +780,16 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         expected_random.insert(Uri::from_static("ws://refuse-the-r.ing"));
         assert_eq!(found_in_random, expected_random);
 
-        tokio::fs::write(
-            members_file.path(),
-            "
-cynthia — https://clementine.viridian.page — 789 — nONE
-henry — hrovnyak.gitlab.io — 123 — None
-??? — http://refuse-the-r.ing — 293847 — none
-arhan — arhan.sh — 0 — none
-kian — kasad.com — 456 — NonE
-",
-        )
-        .await
+        let new_members: IndexMap<String, MemberSpec> = toml::from_str(indoc! { r#"
+            cynthia = { url = "https://clementine.viridian.page", discord-id = 789, check-level = "none" }
+            henry = { url = "hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }
+            "???" = { url = "http://refuse-the-r.ing", discord-id = 293847, check-level = "none" }
+            arhan = { url = "arhan.sh", check-level = "none" }
+            kian = { url = "kasad.com", discord-id = 456, check-level = "none" }
+        "#})
         .unwrap();
 
-        webring.update_from_file_and_check().await.unwrap();
+        webring.update_members_and_check(&new_members).await;
 
         webring.assert_next("clementine.viridian.page", Ok("http://refuse-the-r.ing"));
         webring.assert_next("hrovnyak.gitlab.io", Ok("http://refuse-the-r.ing"));
@@ -873,25 +837,15 @@ kian — kasad.com — 456 — NonE
 
     #[tokio::test]
     async fn test_random_stats_unknown_origin() {
-        let members_file = NamedTempFile::new().unwrap();
-        tokio::fs::write(
-            members_file.path(),
-            "
-kian — kasad.com — 456 — NonE
-",
-        )
-        .await
+        let mut config = make_config();
+        config.members = toml::from_str(indoc! { r#"
+            [kian]
+            url = "kasad.com"
+            discord-id = 456
+            check-level = "none"
+        "# })
         .unwrap();
-        let static_dir = TempDir::new().unwrap();
-
-        let webring = Webring::new(
-            members_file.path().to_owned(),
-            static_dir.path().to_owned(),
-            Intern::new(Uri::from_static("https://ring.purduehackers.com")),
-            None,
-        )
-        .await
-        .unwrap();
+        let webring = Webring::new(&config);
 
         let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
 
@@ -912,26 +866,12 @@ kian — kasad.com — 456 — NonE
 
     #[tokio::test]
     async fn test_random_stats() {
-        let members_file = NamedTempFile::new().unwrap();
-        tokio::fs::write(
-            members_file.path(),
-            "
-kian — kasad.com — 456 — NonE
-cynthia — https://clementine.viridian.page — 789 — nONE
-",
-        )
-        .await
-        .unwrap();
-        let static_dir = TempDir::new().unwrap();
-
-        let webring = Webring::new(
-            members_file.path().to_owned(),
-            static_dir.path().to_owned(),
-            Intern::new(Uri::from_static("https://ring.purduehackers.com")),
-            None,
-        )
-        .await
-        .unwrap();
+        let mut config = make_config();
+        config.members = toml::from_str(indoc!{ r#"
+            kian = { url = "kasad.com", discord-id = 456, check-level = "none" }
+            cynthia = { url = "https://clementine.viridian.page", discord-id = 789, check-level = "none" }
+        "# }).unwrap();
+        let webring = Webring::new(&config);
 
         let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
 
@@ -953,96 +893,96 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         );
     }
 
-    /// Creates a members list file and a static directory containing an `index.html` file.
-    ///
-    /// Returns the [`TempDir`] containing all of the files, path of the members file, and the
-    /// static directory, in that order.
-    ///
-    /// The [`TempDir`] isn't terribly useful, but once it is dropped, the files are cleaned up, so
-    /// it must be returned.
-    async fn create_files() -> (TempDir, PathBuf, PathBuf) {
-        let dir = TempDir::new().unwrap();
-        let static_dir_path = dir.path().join("static");
-        tokio::fs::create_dir(&static_dir_path).await.unwrap();
-        tokio::fs::File::create_new(static_dir_path.join("index.html"))
-            .await
-            .unwrap();
-        let members_file_path = dir.path().join("members.txt");
-        tokio::fs::File::create_new(&members_file_path)
-            .await
-            .unwrap();
-        (dir, members_file_path, static_dir_path)
-    }
+    // /// Creates a members list file and a static directory containing an `index.html` file.
+    // ///
+    // /// Returns the [`TempDir`] containing all of the files, path of the members file, and the
+    // /// static directory, in that order.
+    // ///
+    // /// The [`TempDir`] isn't terribly useful, but once it is dropped, the files are cleaned up, so
+    // /// it must be returned.
+    // async fn create_files() -> (TempDir, PathBuf, PathBuf) {
+    //     let dir = TempDir::new().unwrap();
+    //     let static_dir_path = dir.path().join("static");
+    //     tokio::fs::create_dir(&static_dir_path).await.unwrap();
+    //     tokio::fs::File::create_new(static_dir_path.join("index.html"))
+    //         .await
+    //         .unwrap();
+    //     let members_file_path = dir.path().join("members.txt");
+    //     tokio::fs::File::create_new(&members_file_path)
+    //         .await
+    //         .unwrap();
+    //     (dir, members_file_path, static_dir_path)
+    // }
 
-    #[tokio::test]
-    async fn test_reload_webring() {
-        let (_dir, members_file, static_dir) = create_files().await;
-        let file_contents = "\
-cynthia — https://clementine.viridian.page — 789 — nONE";
-        tokio::fs::write(&members_file, file_contents)
-            .await
-            .unwrap();
-        let webring = Arc::new(
-            Webring::new(
-                members_file.clone(),
-                static_dir,
-                Intern::new(Uri::from_static("https://ring.purduehackers.com")),
-                None,
-            )
-            .await
-            .unwrap(),
-        );
-        webring.enable_reloading().unwrap();
-        assert_eq!(webring.inner.read().unwrap().ordering.len(), 1);
-        let new_file_contents = "\
-cynthia — https://clementine.viridian.page — 789 — nONE
-kian — kasad.com — 123 — none";
-        tokio::fs::write(&members_file, new_file_contents)
-            .await
-            .unwrap();
-        // Wait for a bit just in case the event takes some time to process
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert_eq!(webring.inner.read().unwrap().ordering.len(), 2);
-    }
+    //     #[tokio::test]
+    //     async fn test_reload_webring() {
+    //         let (_dir, members_file, static_dir) = create_files().await;
+    //         let file_contents = "\
+    // cynthia — https://clementine.viridian.page — 789 — nONE";
+    //         tokio::fs::write(&members_file, file_contents)
+    //             .await
+    //             .unwrap();
+    //         let webring = Arc::new(
+    //             Webring::new(
+    //                 members_file.clone(),
+    //                 static_dir,
+    //                 Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+    //                 None,
+    //             )
+    //             .await
+    //             .unwrap(),
+    //         );
+    //         webring.enable_reloading().unwrap();
+    //         assert_eq!(webring.inner.read().unwrap().ordering.len(), 1);
+    //         let new_file_contents = "\
+    // cynthia — https://clementine.viridian.page — 789 — nONE
+    // kian — kasad.com — 123 — none";
+    //         tokio::fs::write(&members_file, new_file_contents)
+    //             .await
+    //             .unwrap();
+    //         // Wait for a bit just in case the event takes some time to process
+    //         tokio::time::sleep(Duration::from_millis(100)).await;
+    //         assert_eq!(webring.inner.read().unwrap().ordering.len(), 2);
+    //     }
 
-    #[tokio::test]
-    async fn test_reload_homepage() {
-        let (_dir, members_file, static_dir) = create_files().await;
-        let webring = Arc::new(Webring {
-            static_dir_path: static_dir.clone(),
-            members_file_path: members_file,
-            ..Default::default()
-        });
-        webring.enable_reloading().unwrap();
+    // #[tokio::test]
+    // async fn test_reload_homepage() {
+    //     let (_dir, members_file, static_dir) = create_files().await;
+    //     let webring = Arc::new(Webring {
+    //         static_dir_path: static_dir.clone(),
+    //         members_file_path: members_file,
+    //         ..Default::default()
+    //     });
+    //     webring.enable_reloading().unwrap();
+    //
+    //     // Generate the homepage
+    //     webring.homepage().await.unwrap();
+    //     assert!(webring.homepage.read().await.is_some());
+    //
+    //     // Change the file
+    //     tokio::fs::write(static_dir.join("index.html"), "test")
+    //         .await
+    //         .unwrap();
+    //
+    //     // Wait for a bit just in case the event takes some time to process
+    //     tokio::time::sleep(Duration::from_millis(100)).await;
+    //     // Expect the homepage to be empty (invalidated)
+    //     assert!(webring.homepage.read().await.is_none());
+    // }
 
-        // Generate the homepage
-        webring.homepage().await.unwrap();
-        assert!(webring.homepage.read().await.is_some());
-
-        // Change the file
-        tokio::fs::write(static_dir.join("index.html"), "test")
-            .await
-            .unwrap();
-
-        // Wait for a bit just in case the event takes some time to process
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        // Expect the homepage to be empty (invalidated)
-        assert!(webring.homepage.read().await.is_none());
-    }
-
-    /// Test to ensure that the reloading logic doesn't create a reference cycle and the webring
-    /// does actually get dropped.
-    #[tokio::test]
-    async fn test_reload_gets_dropped() {
-        let (_dir, members_file, static_dir) = create_files().await;
-        let webring = Arc::new(Webring {
-            members_file_path: members_file,
-            static_dir_path: static_dir,
-            ..Default::default()
-        });
-        let weak_ptr = Arc::downgrade(&webring);
-        webring.enable_reloading().unwrap();
-        drop(webring);
-        assert!(weak_ptr.upgrade().is_none());
-    }
+    // /// Test to ensure that the reloading logic doesn't create a reference cycle and the webring
+    // /// does actually get dropped.
+    // #[tokio::test]
+    // async fn test_reload_gets_dropped() {
+    //     let (_dir, members_file, static_dir) = create_files().await;
+    //     let webring = Arc::new(Webring {
+    //         members_file_path: members_file,
+    //         static_dir_path: static_dir,
+    //         ..Default::default()
+    //     });
+    //     let weak_ptr = Arc::downgrade(&webring);
+    //     webring.enable_reloading().unwrap();
+    //     drop(webring);
+    //     assert!(weak_ptr.upgrade().is_none());
+    // }
 }
