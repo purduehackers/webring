@@ -6,14 +6,13 @@ use std::{
 };
 
 use axum::http::Uri;
-use eyre::Context;
 use log::LevelFilter;
 use reqwest::Url;
 use sarlacc::Intern;
 use serde::{Deserialize, Deserializer, de};
 
 /// Webring configuration object
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Config {
     pub webring: WebringTable,
@@ -23,7 +22,7 @@ pub struct Config {
     pub discord: Option<DiscordTable>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct WebringTable {
     /// Directory from which to serve static content
@@ -40,14 +39,14 @@ pub struct WebringTable {
     pub base_url: Intern<Uri>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct NetworkTable {
     /// Address/port to listen on
     pub listen_addr: SocketAddr,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct LoggingTable {
     /// Log verbosity
@@ -58,7 +57,7 @@ pub struct LoggingTable {
     pub log_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct DiscordTable {
     /// Discord webhook URL
@@ -131,13 +130,163 @@ fn deserialize_url<'de, D>(deserializer: D) -> Result<Url, D::Error>
 where
     D: Deserializer<'de>,
 {
-    Url::parse(<&str>::deserialize(deserializer)?).map_err(de::Error::custom)
+    Url::parse(&String::deserialize(deserializer)?).map_err(de::Error::custom)
 }
 
 impl Config {
     /// Load configuration from the given TOML file.
     pub async fn parse_from_file(path: &Path) -> eyre::Result<Self> {
         let file_contents = tokio::fs::read_to_string(path).await?;
-        toml::from_str(&file_contents).wrap_err("Failed to load configuration file")
+        Ok(toml::from_str(&file_contents)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use axum::http::Uri;
+    use indoc::indoc;
+    use log::LevelFilter;
+    use pretty_assertions::assert_eq;
+    use reqwest::Url;
+    use sarlacc::Intern;
+
+    use super::{Config, DiscordTable, LoggingTable, NetworkTable, WebringTable};
+
+    #[test]
+    fn valid_config() {
+        let config = indoc! { r#"
+            [webring]
+            members-file = "members.txt"
+            static-dir = "static"
+            base-url = "https://ring.purduehackers.com"
+
+            [network]
+            listen-addr = "0.0.0.0:3000"
+
+            [logging]
+            verbosity = "info"
+
+            [discord]
+            webhook-url = "https://api.discord.com/webhook-or-something"
+        "# };
+        let actual: Config =
+            toml::from_str(config).expect("Expected parsing configuration to succeed");
+        let expected = Config {
+            webring: WebringTable {
+                static_dir: PathBuf::from("static"),
+                members_file: PathBuf::from("members.txt"),
+                base_url: Intern::new(Uri::from_static("https://ring.purduehackers.com/")),
+            },
+            network: NetworkTable {
+                listen_addr: "0.0.0.0:3000".parse().unwrap(),
+            },
+            logging: LoggingTable {
+                verbosity: LevelFilter::Info,
+                log_file: None,
+            },
+            discord: Some(DiscordTable {
+                webhook_url: Url::parse("https://api.discord.com/webhook-or-something").unwrap(),
+            }),
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn default_base_url() {
+        let config = indoc! { r#"
+            [webring]
+            members-file = "members.txt"
+            static-dir = "static"
+            [network]
+            listen-addr = "0.0.0.0:3000"
+        "# };
+        let actual: Config = toml::from_str(config).unwrap();
+        assert_eq!(
+            "https://ring.purduehackers.com/",
+            &actual.webring.base_url.to_string()
+        );
+    }
+
+    #[test]
+    fn missing_optional_section() {
+        let config = indoc! { r#"
+            [webring]
+            members-file = "members.txt"
+            static-dir = "static"
+            [network]
+            listen-addr = "0.0.0.0:3000"
+        "# };
+        let actual: Config = toml::from_str(config).unwrap();
+        assert_eq!(None, actual.discord);
+    }
+
+    #[test]
+    fn missing_default_section() {
+        let config = indoc! { r#"
+            [webring]
+            members-file = "members.txt"
+            static-dir = "static"
+            [network]
+            listen-addr = "0.0.0.0:3000"
+        "# };
+        let actual: Config = toml::from_str(config).unwrap();
+        assert_eq!(
+            LoggingTable {
+                verbosity: LevelFilter::Debug,
+                log_file: None
+            },
+            actual.logging
+        );
+    }
+
+    #[test]
+    fn missing_required_field() {
+        let config = indoc! { r#"
+            [webring]
+            members-file = "members.txt"
+            static-dir = "static"
+            [network]
+            [discord]
+            webhook-url = "https://api.discord.com/webhook-or-something"
+        "# };
+        let result = toml::from_str::<Config>(config);
+        assert!(result.is_err());
+        assert_eq!("missing field `listen-addr`", result.unwrap_err().message());
+    }
+
+    #[test]
+    fn missing_required_section() {
+        let config = indoc! { r#"
+            [webring]
+            members-file = "members.txt"
+            static-dir = "static"
+            [discord]
+            webhook-url = "https://api.discord.com/webhook-or-something"
+        "# };
+        let result = toml::from_str::<Config>(config);
+        assert!(result.is_err());
+        assert_eq!("missing field `network`", result.unwrap_err().message());
+    }
+
+    #[test]
+    fn extra_key() {
+        let config = indoc! { r#"
+            [webring]
+            members-file = "members.txt"
+            static-dir = "static"
+            extra-field = 123
+            [network]
+            listen-addr = "0.0.0.0:3000"
+            [discord]
+            webhook-url = "https://api.discord.com/webhook-or-something"
+        "# };
+        let result = toml::from_str::<Config>(config);
+        assert!(result.is_err());
+        assert_eq!(
+            "unknown field `extra-field`, expected one of `static-dir`, `members-file`, `base-url`",
+            result.unwrap_err().message()
+        );
     }
 }
