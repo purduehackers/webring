@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     net::IpAddr,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::{
         Arc, OnceLock, RwLock, RwLockReadGuard,
         atomic::{AtomicBool, Ordering},
@@ -10,7 +11,7 @@ use std::{
 
 use axum::http::{Uri, uri::Authority};
 use chrono::TimeDelta;
-use eyre::{OptionExt, eyre};
+use eyre::{Context, OptionExt, bail, eyre};
 use futures::{StreamExt, stream::FuturesUnordered};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rand::seq::SliceRandom;
@@ -20,16 +21,34 @@ use sarlacc::Intern;
 use thiserror::Error;
 
 use crate::{
-    checking::check,
+    checking::{CheckFailure, check},
+    discord::{DiscordNotifier, Snowflake},
     homepage::{Homepage, MemberForHomepage},
     stats::{Stats, UNKNOWN_ORIGIN},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CheckLevel {
-    ForLinks,
-    JustOnline,
     None,
+    JustOnline,
+    ForLinks,
+}
+
+impl FromStr for CheckLevel {
+    type Err = eyre::Report;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
+            "links" => CheckLevel::ForLinks,
+            "online" => CheckLevel::JustOnline,
+            "none" => CheckLevel::None,
+            _ => {
+                bail!(
+                    "Expected the check level to be one of {{\"links\", \"online\", \"none\"}}. Got \"{s}\""
+                );
+            }
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -37,27 +56,39 @@ struct Member {
     name: String,
     website: Intern<Uri>,
     authority: Intern<Authority>,
-    #[allow(dead_code)]
-    discord_id: String,
+    discord_id: Option<Snowflake>,
     check_level: CheckLevel,
     check_successful: Arc<AtomicBool>,
 }
 
 impl Member {
-    fn check_and_store(
+    fn check_and_store_and_optionally_notify(
         &self,
         base_address: Intern<Uri>,
-    ) -> impl Future<Output = eyre::Result<()>> + Send + 'static {
+        notifier: Option<Arc<DiscordNotifier>>,
+    ) -> impl Future<Output = Option<CheckFailure>> + Send + 'static {
         let website = self.website;
         let check_level = self.check_level;
         let successful = Arc::clone(&self.check_successful);
 
+        let discord_id_for_block = self.discord_id;
+        let base_address_for_block = base_address;
         async move {
-            if let Some(v) = check(&website, check_level, base_address).await {
-                successful.store(v, Ordering::Relaxed);
+            let check_result = check(&website, check_level, base_address_for_block).await;
+            if let Some(failure) = &check_result {
+                successful.store(false, Ordering::Relaxed);
+                if let (Some(notifier), Some(user_id)) = (notifier, discord_id_for_block) {
+                    let message = format!("<@{}> {}", user_id, failure.to_message());
+                    tokio::spawn(async move {
+                        if let Err(err) = notifier.send_message(Some(user_id), &message).await {
+                            log::error!("Error sending Discord notification: {err}");
+                        }
+                    });
+                }
+            } else {
+                successful.store(true, Ordering::Relaxed);
             }
-
-            Ok(())
+            check_result
         }
     }
 }
@@ -81,43 +112,46 @@ pub struct Webring {
     file_watcher: OnceLock<RecommendedWatcher>,
     base_address: Intern<Uri>,
     base_authority: Intern<Authority>,
+    notifier: Option<Arc<DiscordNotifier>>,
     stats: Arc<Stats>,
 }
 
 impl Webring {
     /// Create a webring by parsing the file at the given path.
+    ///
+    /// The members' `check_successful` fields will be initialized to `true` until a check is
+    /// performed using [`check_members()`][Self::check_members].
     pub async fn new(
         members_file: PathBuf,
         static_dir: PathBuf,
         base_address: Intern<Uri>,
+        notifier: Option<DiscordNotifier>,
     ) -> eyre::Result<Webring> {
         let stats = Stats::new();
-        let webring_data = parse_file(&members_file).await;
+        let webring_data = parse_file(&members_file).await?;
 
-        let webring = Webring {
-            inner: RwLock::new(webring_data?),
+        Ok(Webring {
+            inner: RwLock::new(webring_data),
             members_file_path: members_file,
             static_dir_path: static_dir,
             homepage: tokio::sync::RwLock::new(None),
             stats: Arc::new(stats),
             file_watcher: OnceLock::default(),
             base_address,
+            notifier: notifier.map(Arc::new),
             base_authority: Intern::from_ref(base_address.authority().ok_or_eyre(
                 "The base address does not include an authority component (is relative)",
             )?),
-        };
-
-        webring.check_members().await?;
-
-        Ok(webring)
+        })
     }
 
-    /// Update the webring in-place by re-parsing the file given in the original `new` call, and invalidating the cache of the SSR'ed homepage.
+    /// Update the webring in-place by re-parsing the file given in the original `new` call, and
+    /// invalidating the cache of the SSR'ed homepage. All new URLs are checked.
     ///
     /// Useful for updating the webring without restarting the server.
-    pub async fn update_from_file(&self) -> eyre::Result<()> {
+    pub async fn update_from_file_and_check(&self) -> eyre::Result<()> {
         let mut new_members = parse_file(&self.members_file_path).await?;
-        let tasks = FuturesUnordered::new();
+        let mut tasks = FuturesUnordered::new();
 
         {
             let old_members = self.inner.read().unwrap();
@@ -130,38 +164,45 @@ impl Webring {
                         new_members.ordering[*idx].check_successful = check_successful;
                     }
                     None => {
-                        tasks.push(new_members.ordering[*idx].check_and_store(self.base_address));
+                        tasks.push(
+                            new_members.ordering[*idx].check_and_store_and_optionally_notify(
+                                self.base_address,
+                                self.notifier.as_ref().map(Arc::clone),
+                            ),
+                        );
                     }
                 }
             }
         }
 
-        let ret = collect_errs(tasks).await;
+        // Wait for all tasks
+        while tasks.next().await.is_some() {}
 
         *self.inner.write().unwrap() = new_members;
-
         *self.homepage.write().await = None;
-
-        ret
+        Ok(())
     }
 
     /// Query everyone's webpages and check them according to their respective check levels.
-    pub async fn check_members(&self) -> eyre::Result<()> {
-        let tasks = FuturesUnordered::new();
+    pub async fn check_members(&self) {
+        let mut tasks = self
+            .inner
+            .read()
+            .unwrap()
+            .ordering
+            .iter()
+            .map(|member| {
+                member.check_and_store_and_optionally_notify(
+                    self.base_address,
+                    self.notifier.as_ref().map(Arc::clone),
+                )
+            })
+            .collect::<FuturesUnordered<_>>();
 
-        {
-            let inner = self.inner.read().unwrap();
-
-            for member in &inner.ordering {
-                tasks.push(member.check_and_store(self.base_address));
-            }
-        }
-
-        let ret = collect_errs(tasks).await;
+        // Wait for all tasks
+        while tasks.next().await.is_some() {}
 
         *self.homepage.write().await = None;
-
-        ret
     }
 
     fn get_authority(uri: &Uri) -> Result<Intern<Authority>, TraverseWebringError> {
@@ -384,7 +425,9 @@ impl Webring {
                                 );
                                 let webring_for_task = Arc::clone(&webring);
                                 rt.spawn(async move {
-                                    if let Err(err) = webring_for_task.update_from_file().await {
+                                    if let Err(err) =
+                                        webring_for_task.update_from_file_and_check().await
+                                    {
                                         error!("Failed to update webring: {err}");
                                     }
                                     info!("Webring reloaded");
@@ -443,26 +486,6 @@ impl Webring {
     }
 }
 
-async fn collect_errs(
-    tasks: FuturesUnordered<impl Future<Output = Result<(), eyre::Error>> + Send>,
-) -> Result<(), eyre::Error> {
-    let errs = tasks
-        .filter_map(async |res| res.err())
-        .collect::<Vec<_>>()
-        .await;
-
-    if errs.is_empty() {
-        Ok(())
-    } else {
-        Err(eyre!(
-            errs.into_iter()
-                .map(|v| v.to_string())
-                .collect::<Vec<_>>()
-                .join("\n\n")
-        ))
-    }
-}
-
 async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
     let file = tokio::fs::read_to_string(&path).await?;
 
@@ -485,17 +508,7 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
             ));
         }
 
-        #[allow(clippy::match_on_vec_items)]
-        let check_level = match &*split[3].to_lowercase() {
-            "for links" => CheckLevel::ForLinks,
-            "just online" => CheckLevel::JustOnline,
-            "none" => CheckLevel::None,
-            _ => {
-                return Err(eyre!(
-                    "Expected the check level to be one of {{\"for links\", \"just online\", \"none\"}}. Got:\n\n{line}"
-                ));
-            }
-        };
+        let check_level = CheckLevel::from_str(split[3])?;
 
         let uri = split[1].parse::<Uri>()?;
 
@@ -508,9 +521,12 @@ async fn parse_file(path: &Path) -> eyre::Result<WebringData> {
             name: split[0].to_owned(),
             website: Intern::new(uri),
             authority,
-            discord_id: split[2].to_owned(),
+            discord_id: match split[2] {
+                "-" => None,
+                id => Some(id.parse().wrap_err("Discord ID is not valid")?),
+            },
             check_level,
-            check_successful: Arc::new(AtomicBool::new(false)),
+            check_successful: Arc::new(AtomicBool::new(true)),
         };
 
         members
@@ -547,6 +563,7 @@ mod tests {
 
     use axum::http::{Uri, uri::Authority};
     use chrono::Utc;
+    use pretty_assertions::assert_eq;
     use sarlacc::Intern;
     use tempfile::{NamedTempFile, TempDir};
 
@@ -568,6 +585,7 @@ mod tests {
                 file_watcher: OnceLock::new(),
                 base_address: Intern::default(),
                 base_authority: Intern::new("ring.purduehackers.com".parse().unwrap()),
+                notifier: None,
                 stats: Arc::default(),
             }
         }
@@ -618,7 +636,7 @@ mod tests {
 henry — hrovnyak.gitlab.io — 123 — None
 kian — kasad.com — 456 — NonE
 cynthia — https://clementine.viridian.page — 789 — nONE
-??? — ws://refuse-the-r.ing — bruh — none
+??? — ws://refuse-the-r.ing — - — none
 ",
         )
         .await
@@ -629,6 +647,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             members_file.path().to_owned(),
             static_dir.path().to_owned(),
             Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            None,
         )
         .await
         .unwrap();
@@ -649,7 +668,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                     name: "henry".to_owned(),
                     website: Intern::new(Uri::from_static("hrovnyak.gitlab.io")),
                     authority: Intern::new("hrovnyak.gitlab.io".parse().unwrap()),
-                    discord_id: "123".to_owned(),
+                    discord_id: Some("123".parse().unwrap()),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
@@ -657,7 +676,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                     name: "kian".to_owned(),
                     website: Intern::new(Uri::from_static("kasad.com")),
                     authority: Intern::new("kasad.com".parse().unwrap()),
-                    discord_id: "456".to_owned(),
+                    discord_id: Some("456".parse().unwrap()),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
@@ -665,7 +684,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                     name: "cynthia".to_owned(),
                     website: Intern::new(Uri::from_static("https://clementine.viridian.page")),
                     authority: Intern::new("clementine.viridian.page".parse().unwrap()),
-                    discord_id: "789".to_owned(),
+                    discord_id: Some("789".parse().unwrap()),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
@@ -673,7 +692,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                     name: "???".to_owned(),
                     website: Intern::new(Uri::from_static("ws://refuse-the-r.ing")),
                     authority: Intern::new("refuse-the-r.ing".parse().unwrap()),
-                    discord_id: "bruh".to_owned(),
+                    discord_id: None,
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
@@ -798,15 +817,15 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             "
 cynthia — https://clementine.viridian.page — 789 — nONE
 henry — hrovnyak.gitlab.io — 123 — None
-??? — http://refuse-the-r.ing — bruh — none
-arhan — arhan.sh — qter — none
+??? — http://refuse-the-r.ing — 293847 — none
+arhan — arhan.sh — 0 — none
 kian — kasad.com — 456 — NonE
 ",
         )
         .await
         .unwrap();
 
-        webring.update_from_file().await.unwrap();
+        webring.update_from_file_and_check().await.unwrap();
 
         webring.assert_next("clementine.viridian.page", Ok("http://refuse-the-r.ing"));
         webring.assert_next("hrovnyak.gitlab.io", Ok("http://refuse-the-r.ing"));
@@ -869,6 +888,7 @@ kian — kasad.com — 456 — NonE
             members_file.path().to_owned(),
             static_dir.path().to_owned(),
             Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            None,
         )
         .await
         .unwrap();
@@ -908,6 +928,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
             members_file.path().to_owned(),
             static_dir.path().to_owned(),
             Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            None,
         )
         .await
         .unwrap();
@@ -966,6 +987,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE";
                 members_file.clone(),
                 static_dir,
                 Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+                None,
             )
             .await
             .unwrap(),

@@ -7,18 +7,21 @@ use std::{
     path::PathBuf,
     process::ExitCode,
     sync::Arc,
+    time::Duration,
 };
 
 use axum::http::{Uri, uri::Scheme};
-use chrono::Duration;
 use clap::{Parser, ValueEnum};
+use discord::DiscordNotifier;
 use ftail::Ftail;
 use log::LevelFilter;
+use reqwest::Url;
 use routes::create_router;
 use sarlacc::Intern;
 use webring::Webring;
 
 mod checking;
+mod discord;
 mod homepage;
 mod routes;
 mod stats;
@@ -60,6 +63,10 @@ struct CliOptions {
 
     #[arg(short = 'a', long, default_value = "https://ring.purduehackers.com", value_parser = parse_uri)]
     address: Intern<Uri>,
+
+    /// Discord webhook URL
+    #[arg(long)]
+    discord_webhook_url: Option<Url>,
 }
 
 fn parse_uri(str: &str) -> eyre::Result<Intern<Uri>> {
@@ -143,11 +150,15 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Create Discord notifier
+    let maybe_notifier = cli.discord_webhook_url.as_ref().map(DiscordNotifier::new);
+
     // Create webring data structure
     let webring = match Webring::new(
         cli.members_file.clone(),
         cli.static_dir.clone(),
         cli.address,
+        maybe_notifier,
     )
     .await
     {
@@ -158,12 +169,24 @@ async fn main() -> ExitCode {
         }
     };
 
+    // Perform site checks every 5 minutes
+    {
+        const SITE_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 5);
+        let webring_for_task = Arc::clone(&webring);
+        tokio::spawn(async move {
+            loop {
+                webring_for_task.check_members().await;
+                tokio::time::sleep(SITE_CHECK_INTERVAL).await;
+            }
+        });
+    }
+
     // Create member file watcher
     if let Err(err) = webring.enable_reloading() {
         log::error!("Unable to watch member file for changes: {err}");
         log::warn!("Webring will not reload automatically.");
     }
-    webring.enable_ip_pruning(Duration::hours(1));
+    webring.enable_ip_pruning(chrono::Duration::hours(1));
     log::info!("Watching {} for changes", cli.members_file.display());
 
     // Start server

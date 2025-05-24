@@ -1422,6 +1422,7 @@ dependencies = [
  "same-file",
  "sarlacc",
  "serde",
+ "serde_json",
  "surge-ping",
  "tempfile",
  "tera",

@@ -472,7 +472,7 @@ mod tests {
 henry — hrovnyak.gitlab.io — 123 — None
 kian — kasad.com — 456 — NonE
 cynthia — https://clementine.viridian.page — 789 — nONE
-??? — ws://refuse-the-r.ing — bruh — none
+??? — ws://refuse-the-r.ing — - — none
 ",
         )
         .await
@@ -487,6 +487,7 @@ cynthia — https://clementine.viridian.page — 789 — nONE
                 members_file.path().to_owned(),
                 static_dir.path().to_owned(),
                 Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+                None,
             )
             .await
             .unwrap(),
