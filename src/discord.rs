@@ -11,7 +11,7 @@ use reqwest::{
     Client, Response, StatusCode, Url,
     header::{self, HeaderValue},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 /// A user agent representing our program. [Required by Discord][api-doc-ua].
@@ -26,7 +26,7 @@ const USER_AGENT: &str = concat!(
 );
 
 /// Represents a snowflake, the type used to encode identifiers in Discord APIs.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Snowflake(u64);
 impl From<u64> for Snowflake {
     fn from(value: u64) -> Self {
