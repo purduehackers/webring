@@ -6,10 +6,13 @@ use std::{
 };
 
 use axum::http::Uri;
+use indexmap::IndexMap;
 use log::LevelFilter;
 use reqwest::Url;
 use sarlacc::Intern;
 use serde::{Deserialize, Deserializer, de};
+
+use crate::{discord::Snowflake, webring::CheckLevel};
 
 /// Webring configuration object
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -20,6 +23,10 @@ pub struct Config {
     #[serde(default = "default_logging_table")]
     pub logging: LoggingTable,
     pub discord: Option<DiscordTable>,
+
+    /// Map from member name to their site details
+    #[serde(default)]
+    pub members: IndexMap<String, MemberSpec>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -28,15 +35,20 @@ pub struct WebringTable {
     /// Directory from which to serve static content
     pub static_dir: PathBuf,
 
-    /// File to read member database from
-    pub members_file: PathBuf,
-
     /// Base URL of the webring, e.g. `https://ring.purduehackers.com`
+    ///
+    /// It is guaranteed to have a valid host/authority component
     #[serde(
         default = "default_address",
         deserialize_with = "deserialize_interned_uri"
     )]
-    pub base_url: Intern<Uri>,
+    base_url: Intern<Uri>,
+}
+
+impl WebringTable {
+    pub fn base_url(&self) -> Intern<Uri> {
+        self.base_url
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -63,6 +75,31 @@ pub struct DiscordTable {
     /// Discord webhook URL
     #[serde(deserialize_with = "deserialize_url")]
     pub webhook_url: Url,
+}
+
+/// Describes a webring member
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct MemberSpec {
+    /// URI of the member's site
+    ///
+    /// It is guaranteed to have a non-empty authority component.
+    #[serde(
+        alias = "url",
+        alias = "site",
+        deserialize_with = "deserialize_interned_uri"
+    )]
+    uri: Intern<Uri>,
+    pub discord_id: Option<Snowflake>,
+    #[serde(default)]
+    pub check_level: CheckLevel,
+}
+
+impl MemberSpec {
+    /// Get the member's URI
+    pub fn uri(&self) -> Intern<Uri> {
+        self.uri
+    }
 }
 
 // This type exists so serde can figure out what variants are available for the verbosity option.
@@ -146,11 +183,14 @@ mod tests {
     use std::path::PathBuf;
 
     use axum::http::Uri;
+    use indexmap::IndexMap;
     use indoc::indoc;
     use log::LevelFilter;
     use pretty_assertions::assert_eq;
     use reqwest::Url;
     use sarlacc::Intern;
+
+    use crate::{config::MemberSpec, discord::Snowflake, webring::CheckLevel};
 
     use super::{Config, DiscordTable, LoggingTable, NetworkTable, WebringTable};
 
@@ -158,7 +198,6 @@ mod tests {
     fn valid_config() {
         let config = indoc! { r#"
             [webring]
-            members-file = "members.txt"
             static-dir = "static"
             base-url = "https://ring.purduehackers.com"
 
@@ -176,7 +215,6 @@ mod tests {
         let expected = Config {
             webring: WebringTable {
                 static_dir: PathBuf::from("static"),
-                members_file: PathBuf::from("members.txt"),
                 base_url: Intern::new(Uri::from_static("https://ring.purduehackers.com/")),
             },
             network: NetworkTable {
@@ -189,6 +227,7 @@ mod tests {
             discord: Some(DiscordTable {
                 webhook_url: Url::parse("https://api.discord.com/webhook-or-something").unwrap(),
             }),
+            members: IndexMap::new(),
         };
         assert_eq!(expected, actual);
     }
@@ -197,7 +236,6 @@ mod tests {
     fn default_base_url() {
         let config = indoc! { r#"
             [webring]
-            members-file = "members.txt"
             static-dir = "static"
             [network]
             listen-addr = "0.0.0.0:3000"
@@ -213,7 +251,6 @@ mod tests {
     fn missing_optional_section() {
         let config = indoc! { r#"
             [webring]
-            members-file = "members.txt"
             static-dir = "static"
             [network]
             listen-addr = "0.0.0.0:3000"
@@ -226,7 +263,6 @@ mod tests {
     fn missing_default_section() {
         let config = indoc! { r#"
             [webring]
-            members-file = "members.txt"
             static-dir = "static"
             [network]
             listen-addr = "0.0.0.0:3000"
@@ -245,7 +281,6 @@ mod tests {
     fn missing_required_field() {
         let config = indoc! { r#"
             [webring]
-            members-file = "members.txt"
             static-dir = "static"
             [network]
             [discord]
@@ -260,7 +295,6 @@ mod tests {
     fn missing_required_section() {
         let config = indoc! { r#"
             [webring]
-            members-file = "members.txt"
             static-dir = "static"
             [discord]
             webhook-url = "https://api.discord.com/webhook-or-something"
@@ -274,7 +308,6 @@ mod tests {
     fn extra_key() {
         let config = indoc! { r#"
             [webring]
-            members-file = "members.txt"
             static-dir = "static"
             extra-field = 123
             [network]
@@ -285,8 +318,87 @@ mod tests {
         let result = toml::from_str::<Config>(config);
         assert!(result.is_err());
         assert_eq!(
-            "unknown field `extra-field`, expected one of `static-dir`, `members-file`, `base-url`",
+            "unknown field `extra-field`, expected `static-dir` or `base-url`",
             result.unwrap_err().message()
         );
+    }
+
+    #[test]
+    fn members_as_objects() {
+        let config = indoc! { r#"
+            [webring]
+            static-dir = "static"
+            [network]
+            listen-addr = "0.0.0.0:3000"
+            [members]
+            kian = { url = "https://kasad.com", discord-id = 123456789 }
+            henry = { url = "https://hrovnyak.gitlab.io", check-level = "none" }
+        "# };
+        let result = toml::from_str::<Config>(config).unwrap();
+        assert_eq!(2, result.members.len());
+        assert_eq!(
+            MemberSpec {
+                uri: Intern::new(Uri::from_static("https://kasad.com")),
+                discord_id: Some(Snowflake::from(123_456_789)),
+                check_level: CheckLevel::ForLinks,
+            },
+            result.members["kian"]
+        );
+        assert_eq!(
+            MemberSpec {
+                uri: Intern::new(Uri::from_static("https://hrovnyak.gitlab.io")),
+                discord_id: None,
+                check_level: CheckLevel::None,
+            },
+            result.members["henry"]
+        );
+    }
+
+    #[test]
+    fn members_as_tables() {
+        let config = indoc! { r#"
+            [webring]
+            static-dir = "static"
+            [network]
+            listen-addr = "0.0.0.0:3000"
+
+            [members.kian]
+            url = "https://kasad.com"
+            discord-id = 123456789
+
+            [members.henry]
+            url = "https://hrovnyak.gitlab.io"
+            check-level = "none"
+        "# };
+        let result = toml::from_str::<Config>(config).unwrap();
+        assert_eq!(2, result.members.len());
+        assert_eq!(
+            MemberSpec {
+                uri: Intern::new(Uri::from_static("https://kasad.com")),
+                discord_id: Some(Snowflake::from(123_456_789)),
+                check_level: CheckLevel::ForLinks,
+            },
+            result.members["kian"]
+        );
+        assert_eq!(
+            MemberSpec {
+                uri: Intern::new(Uri::from_static("https://hrovnyak.gitlab.io")),
+                discord_id: None,
+                check_level: CheckLevel::None,
+            },
+            result.members["henry"]
+        );
+    }
+
+    #[test]
+    fn preserve_member_order() {
+        let members: IndexMap<String, MemberSpec> = toml::from_str(indoc! { r#"
+            c = { url = "c.com" }
+            b = { url = "b.com" }
+            a = { url = "a.com" }
+        "# })
+        .unwrap();
+        let list = members.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>();
+        assert_eq!(vec!["c", "b", "a"], list);
     }
 }

@@ -1,5 +1,4 @@
 [webring]
-members-file = "members.txt"
 static-dir = "static"
 base-url = "https://ring.purduehackers.com"
 
@@ -8,3 +7,9 @@ listen-addr = "0.0.0.0:3000"
 
 [logging]
 verbosity = "info"
+
+[members]
+henry = { url = "hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }
+kian = { url = "kasad.com", discord-id = 456, check-level = "none" }
+cynthia = { url = "https://clementine.viridian.page", discord-id = 789, check-level = "none" }
+"???" = { url = "ws://refuse-the-r.ing", check-level = "none" }

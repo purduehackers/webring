@@ -9,7 +9,6 @@ use std::{
 
 use clap::Parser;
 use config::Config;
-use discord::DiscordNotifier;
 use ftail::Ftail;
 use routes::create_router;
 use webring::Webring;
@@ -59,24 +58,8 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // Create Discord notifier
-    let maybe_notifier = cfg.discord.map(|dt| DiscordNotifier::new(&dt.webhook_url));
-
     // Create webring data structure
-    let webring = match Webring::new(
-        cfg.webring.members_file.clone(),
-        cfg.webring.static_dir.clone(),
-        cfg.webring.base_url,
-        maybe_notifier,
-    )
-    .await
-    {
-        Ok(w) => Arc::new(w),
-        Err(err) => {
-            log::error!("Failed to create webring: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let webring = Arc::new(Webring::new(&cfg));
 
     // Perform site checks every 5 minutes
     {
@@ -90,16 +73,17 @@ async fn main() -> ExitCode {
         });
     }
 
-    // Create member file watcher
-    if let Err(err) = webring.enable_reloading() {
-        log::error!("Unable to watch member file for changes: {err}");
-        log::warn!("Webring will not reload automatically.");
-    }
     webring.enable_ip_pruning(chrono::Duration::hours(1));
-    log::info!(
-        "Watching {} for changes",
-        cfg.webring.members_file.display()
-    );
+
+    // // Create member file watcher
+    // if let Err(err) = webring.enable_reloading() {
+    //     log::error!("Unable to watch member file for changes: {err}");
+    //     log::warn!("Webring will not reload automatically.");
+    // }
+    // log::info!(
+    //     "Watching {} for changes",
+    //     cfg.webring.members_file.display()
+    // );
 
     // Start server
     let router = create_router(&cfg.webring.static_dir)

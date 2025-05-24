@@ -436,10 +436,10 @@ mod tests {
     use chrono::Utc;
     use eyre::eyre;
     use http_body_util::BodyExt;
+    use indoc::indoc;
     use pretty_assertions::assert_ne;
     use reqwest::StatusCode;
-    use sarlacc::Intern;
-    use tempfile::{NamedTempFile, TempDir};
+    use tempfile::TempDir;
     use tokio::fs;
     use tower::{Service, ServiceExt};
     use tower_http::catch_panic::ResponseForPanic;
@@ -477,38 +477,26 @@ mod tests {
     }
 
     // Return the temporary files so that they don't go away
-    async fn app() -> (Router, Arc<Webring>, (NamedTempFile, TempDir)) {
-        let members_file = NamedTempFile::new().unwrap();
-        tokio::fs::write(
-            members_file.path(),
-            "
-henry — hrovnyak.gitlab.io — 123 — None
-kian — kasad.com — 456 — NonE
-cynthia — https://clementine.viridian.page — 789 — nONE
-??? — ws://refuse-the-r.ing — - — none
-",
-        )
-        .await
-        .unwrap();
+    async fn app() -> (Router, Arc<Webring>, TempDir) {
         let static_dir = TempDir::new().unwrap();
         fs::write(static_dir.path().join("index.html"), "Hello homepage!")
             .await
             .unwrap();
-
-        let webring = Arc::new(
-            Webring::new(
-                members_file.path().to_owned(),
-                static_dir.path().to_owned(),
-                Intern::new(Uri::from_static("https://ring.purduehackers.com")),
-                None,
-            )
-            .await
-            .unwrap(),
-        );
-
+        let config = toml::from_str(&format!(indoc! { r#"
+            [webring]
+            base-url = "https://ring.purduehackers.com"
+            static-dir = "{}"
+            [network]
+            listen-addr = "0.0.0.0:3000"
+            [members]
+            henry = {{ url = "hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }}
+            kian = {{ url = "kasad.com", discord-id = 456, check-level = "none" }}
+            cynthia = {{ url = "https://clementine.viridian.page", discord-id = 789, check-level = "none" }}
+            "???" = {{ url = "ws://refuse-the-r.ing", check-level = "none" }}
+        "# }, static_dir.path().display())).unwrap();
+        let webring = Arc::new(Webring::new(&config));
         let router: Router = create_router(static_dir.path()).with_state(Arc::clone(&webring));
-
-        (router, webring, (members_file, static_dir))
+        (router, webring, static_dir)
     }
 
     #[tokio::test]
