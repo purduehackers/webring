@@ -1,10 +1,20 @@
-use std::fmt::{Display, Write as _};
+use lol_html::{
+    element,
+    send::{HtmlRewriter, Settings},
+};
+use std::{
+    fmt::{Display, Write as _},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+use tokio::io::AsyncReadExt;
 
 use axum::http::{Uri, uri::Scheme};
 use chrono::Utc;
 use futures::TryStreamExt;
 use log::{error, info};
-use quick_xml::{Reader, events::Event};
 use reqwest::StatusCode;
 use sarlacc::Intern;
 use tokio::sync::RwLock;
@@ -124,15 +134,15 @@ async fn check_impl(
     if check_level == CheckLevel::ForLinks {
         let stream = successful_response.bytes_stream();
 
-        return scan_for_links(
+        (scan_for_links(
             StreamReader::new(stream.map_err(std::io::Error::other)),
             base_address,
         )
-        .await
-        .map(CheckFailure::MissingLinks);
+        .await)
+            .err()
+    } else {
+        None
     }
-
-    None
 }
 
 /// Represents a failed result of a validation check
@@ -144,6 +154,10 @@ pub enum CheckFailure {
     ResponseStatus(StatusCode),
     /// Site returned a successful response but is missing the expected links
     MissingLinks(MissingLinks),
+    /// IO error
+    IOError(std::io::Error),
+    /// HTML parsing error
+    ParsingError(lol_html::errors::RewritingError),
 }
 
 impl CheckFailure {
@@ -164,6 +178,12 @@ impl CheckFailure {
                 msg
             }
             CheckFailure::MissingLinks(missing_links) => missing_links.to_string(),
+            CheckFailure::IOError(err) => {
+                format!("There was an IO error while reading the body of your site: {err}")
+            }
+            CheckFailure::ParsingError(err) => {
+                format!("There was an error parsing your HTML document: {err}")
+            }
         }
     }
 }
@@ -190,6 +210,8 @@ impl Display for CheckFailure {
                 }
                 write!(f, "Missing links: {}", missing_link_names.join(", "))
             }
+            CheckFailure::IOError(e) => e.fmt(f),
+            CheckFailure::ParsingError(e) => e.fmt(f),
         }
     }
 }
@@ -233,6 +255,10 @@ impl MissingLinks {
             _ => {}
         }
     }
+
+    fn all_found(&self) -> bool {
+        !self.home && !self.next && !self.prev
+    }
 }
 
 impl Display for MissingLinks {
@@ -261,75 +287,86 @@ impl Display for MissingLinks {
 }
 
 async fn scan_for_links(
-    webpage: impl tokio::io::AsyncBufRead + Unpin,
+    mut webpage: impl tokio::io::AsyncBufRead + Unpin,
     base_address: Intern<Uri>,
-) -> Option<MissingLinks> {
-    // Streams HTML tokens
-    let mut reader = Reader::from_reader(webpage);
-
-    let decoder = reader.decoder();
-
-    let mut missing_links = MissingLinks {
+) -> Result<(), CheckFailure> {
+    // This synchronization primitives should never actually be contented but it convinces Rust that the thing in question is `Send`. That way it can be kept across the `await`.
+    let missing_links = Mutex::new(MissingLinks {
         base_address,
         home: true,
         next: true,
         prev: true,
-    };
+    });
+    let done = AtomicBool::new(false);
 
-    let mut buf = Vec::new();
+    let mut rewriter = HtmlRewriter::new(
+        Settings {
+            element_content_handlers: vec![
+                element!("a[href]", |el| {
+                    // Unwrap is OK since we selected for href
+                    let Ok(href) = el.get_attribute("href").unwrap().parse::<Uri>() else {
+                        return Ok(());
+                    };
 
-    while let Ok(event) = reader.read_event_into_async(&mut buf).await {
-        // If we don't break, the reader will hang
-        if let Event::Eof = event {
+                    let mut missing_links = missing_links.lock().unwrap();
+                    missing_links.found_link(&href);
+
+                    if missing_links.all_found() {
+                        done.store(true, Ordering::Relaxed);
+                    }
+
+                    Ok(())
+                }),
+                element!("*[data-phwebring]", |el| {
+                    // Unwrap is OK since we selected for data-phwebring
+                    let value = el.get_attribute("data-phwebring").unwrap();
+
+                    let mut missing_links = missing_links.lock().unwrap();
+
+                    match &*value {
+                        "prev" | "previous" => missing_links.prev = false,
+                        "home" => missing_links.home = false,
+                        "next" => missing_links.next = false,
+                        _ => {}
+                    }
+
+                    if missing_links.all_found() {
+                        done.store(true, Ordering::Relaxed);
+                    }
+
+                    Ok(())
+                }),
+            ],
+            ..Settings::new_send()
+        },
+        |_: &[u8]| {},
+    );
+
+    let mut buf = Box::new([0_u8; 16384]);
+    loop {
+        if done.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
+        let bytes = webpage
+            .read_buf(&mut &mut buf[..])
+            .await
+            .map_err(CheckFailure::IOError)?;
+
+        if bytes == 0 {
             break;
         }
 
-        // Is the token a start tag?
-        if let Event::Start(tag) = event {
-            // Is the tag an `<a ...>` tag?
-            if tag.name().0 == b"a" {
-                // Try to get the href attribute
-                let Ok(Some(attr)) = tag.try_get_attribute("href") else {
-                    continue;
-                };
-
-                let Ok(attr_value) = attr.decode_and_unescape_value(decoder) else {
-                    continue;
-                };
-
-                let Ok(uri) = attr_value.parse::<Uri>() else {
-                    continue;
-                };
-
-                // Mark the link as found if it's one we expect
-                missing_links.found_link(&uri);
-            } else {
-                // Try to get the `data-phwebring` attribute out
-                let Ok(Some(attr)) = tag.try_get_attribute("data-phwebring") else {
-                    continue;
-                };
-
-                let Ok(attr_value) = attr.decode_and_unescape_value(decoder) else {
-                    continue;
-                };
-
-                // If the value matches any of these, mark the link as found.
-                match &*attr_value {
-                    "prev" | "previous" => missing_links.prev = false,
-                    "home" => missing_links.home = false,
-                    "next" => missing_links.next = false,
-                    _ => {}
-                }
-            }
-        }
-
-        // If we've found all of the links, short circuit
-        if !missing_links.home && !missing_links.next && !missing_links.prev {
-            return None;
-        }
+        rewriter
+            .write(&buf[0..bytes])
+            .map_err(CheckFailure::ParsingError)?;
     }
 
-    Some(missing_links)
+    drop(rewriter);
+
+    Err(CheckFailure::MissingLinks(
+        missing_links.into_inner().unwrap(),
+    ))
 }
 
 #[cfg(test)]
@@ -346,11 +383,16 @@ mod tests {
         res: impl Into<Option<(bool, bool, bool)>>,
     ) {
         assert_eq!(
-            scan_for_links(
+            match scan_for_links(
                 file.replace("ADDRESS", base_address).as_bytes(),
                 Intern::new(Uri::from_static(base_address))
             )
-            .await,
+            .await
+            {
+                Ok(()) => None,
+                Err(CheckFailure::MissingLinks(missing)) => Some(missing),
+                e => panic!("{e:?}"),
+            },
             res.into().map(|(home, prev, next)| MissingLinks {
                 home,
                 next,
@@ -403,8 +445,11 @@ mod tests {
         assert_links_gives(
             "https://x/",
             "<carousel>
+                <img/>
+            </carousel>
+            <thingy>
                 <a href=\"ADDRESSprevious?query=huh\"></a>
-            </carousel>",
+            </thingy>",
             (true, false, true),
         )
         .await;
