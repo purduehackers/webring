@@ -9,7 +9,6 @@ on:
       - 'v*'
   pull_request:
     branches:
-      - master
       - 'release/*'
 
 env:
