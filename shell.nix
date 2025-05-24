@@ -10,7 +10,9 @@ let
     sha256 = "sha256:0r8vvm8xw17xdqhh2i61ghdqcq0fizi7z64qyck82q7bcy9sksap";
   });
   pkgs = import <nixpkgs> { overlays = [ rust_overlay ]; };
-  rust = (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml);
+  rust = pkgs.rust-bin.stable.latest.default.override {
+    extensions = [ "rust-src" "clippy" "rustfmt" "llvm-tools-preview" ];
+  };
 in
 pkgs.mkShell {
   buildInputs = [
