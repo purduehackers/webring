@@ -1,7 +1,4 @@
-use std::{
-    fmt::{Display, Write as _},
-    io::ErrorKind,
-};
+use std::fmt::{Display, Write as _};
 
 use axum::http::{Uri, uri::Scheme};
 use chrono::Utc;
@@ -128,7 +125,7 @@ async fn check_impl(
         let stream = successful_response.bytes_stream();
 
         return scan_for_links(
-            StreamReader::new(stream.map_err(|e| std::io::Error::new(ErrorKind::Other, e))),
+            StreamReader::new(stream.map_err(std::io::Error::other)),
             base_address,
         )
         .await
