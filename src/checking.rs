@@ -9,6 +9,7 @@ use futures::TryStreamExt;
 use log::{error, info};
 use quick_xml::{Reader, events::Event};
 use reqwest::StatusCode;
+use sarlacc::Intern;
 use tokio::sync::RwLock;
 use tokio_util::io::StreamReader;
 
@@ -81,7 +82,7 @@ async fn is_online() -> bool {
 pub async fn check(
     website: &Uri,
     check_level: CheckLevel,
-    base_address: &Uri,
+    base_address: Intern<Uri>,
 ) -> Option<CheckFailure> {
     match check_impl(website, check_level, base_address).await {
         None => None,
@@ -107,7 +108,7 @@ pub async fn check(
 async fn check_impl(
     website: &Uri,
     check_level: CheckLevel,
-    base_address: &Uri,
+    base_address: Intern<Uri>,
 ) -> Option<CheckFailure> {
     if check_level == CheckLevel::None {
         return None;
@@ -207,7 +208,7 @@ fn status_to_string(status: StatusCode) -> String {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct MissingLinks {
-    base_address: Uri,
+    base_address: Intern<Uri>,
     pub home: bool,
     pub next: bool,
     pub prev: bool,
@@ -264,7 +265,7 @@ impl Display for MissingLinks {
 
 async fn scan_for_links(
     webpage: impl tokio::io::AsyncBufRead + Unpin,
-    base_address: &Uri,
+    base_address: Intern<Uri>,
 ) -> Option<MissingLinks> {
     // Streams HTML tokens
     let mut reader = Reader::from_reader(webpage);
@@ -272,7 +273,7 @@ async fn scan_for_links(
     let decoder = reader.decoder();
 
     let mut missing_links = MissingLinks {
-        base_address: base_address.clone(),
+        base_address,
         home: true,
         next: true,
         prev: true,
@@ -338,6 +339,7 @@ async fn scan_for_links(
 mod tests {
     use axum::{Router, http::Uri, response::Html, routing::get};
     use reqwest::StatusCode;
+    use sarlacc::Intern;
 
     use super::{CheckFailure, CheckLevel, MissingLinks, scan_for_links};
 
@@ -349,14 +351,14 @@ mod tests {
         assert_eq!(
             scan_for_links(
                 file.replace("ADDRESS", base_address).as_bytes(),
-                &Uri::from_static(base_address)
+                Intern::new(Uri::from_static(base_address))
             )
             .await,
             res.into().map(|(home, prev, next)| MissingLinks {
                 home,
                 next,
                 prev,
-                base_address: Uri::from_static(base_address)
+                base_address: Intern::new(Uri::from_static(base_address))
             })
         );
     }
@@ -569,7 +571,7 @@ mod tests {
             ),
         ];
 
-        let base = Uri::from_static("https://ring.purduehackers.com");
+        let base = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
         for (site, expect_passing, does_failure_match) in sites {
             let levels = [
                 CheckLevel::None,
@@ -578,7 +580,7 @@ mod tests {
             ];
             for level in levels {
                 // FIXME: Collect CheckFailure and check type
-                let maybe_failure = super::check(&site, level, &base).await;
+                let maybe_failure = super::check(&site, level, base).await;
                 eprintln!("Checking {} at level {:?}", &site, level);
                 let was_successful = maybe_failure.is_none();
                 assert_eq!(expect_passing.contains(&level), was_successful);

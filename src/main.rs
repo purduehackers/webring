@@ -17,12 +17,14 @@ use ftail::Ftail;
 use log::LevelFilter;
 use reqwest::Url;
 use routes::create_router;
+use sarlacc::Intern;
 use webring::Webring;
 
 mod checking;
 mod discord;
 mod homepage;
 mod routes;
+mod stats;
 mod webring;
 
 /// Default log level.
@@ -60,14 +62,14 @@ struct CliOptions {
     members_file: PathBuf,
 
     #[arg(short = 'a', long, default_value = "https://ring.purduehackers.com", value_parser = parse_uri)]
-    address: Uri,
+    address: Intern<Uri>,
 
     /// Discord webhook URL
     #[arg(long)]
     discord_webhook_url: Option<Url>,
 }
 
-fn parse_uri(str: &str) -> eyre::Result<Uri> {
+fn parse_uri(str: &str) -> eyre::Result<Intern<Uri>> {
     let uri = str.parse::<Uri>()?;
 
     if !uri.path().trim_matches('/').is_empty() {
@@ -88,7 +90,7 @@ fn parse_uri(str: &str) -> eyre::Result<Uri> {
         ));
     }
 
-    Ok(uri)
+    Ok(Intern::new(uri))
 }
 
 // This type exists so clap can figure out what variants are available for the verbosity option.
@@ -155,7 +157,7 @@ async fn main() -> ExitCode {
     let webring = match Webring::new(
         cli.members_file.clone(),
         cli.static_dir.clone(),
-        cli.address.clone(),
+        cli.address,
         maybe_notifier,
     )
     .await
@@ -184,10 +186,11 @@ async fn main() -> ExitCode {
         log::error!("Unable to watch member file for changes: {err}");
         log::warn!("Webring will not reload automatically.");
     }
+    webring.enable_ip_pruning(chrono::Duration::hours(1));
     log::info!("Watching {} for changes", cli.members_file.display());
 
     // Start server
-    let router = create_router(&cli).with_state(Arc::clone(&webring));
+    let router = create_router(&cli.static_dir).with_state(Arc::clone(&webring));
     let bind_addr = &cli.listen_addr;
     match tokio::net::TcpListener::bind(bind_addr).await {
         // Unwrapping this is fine because it will never resolve

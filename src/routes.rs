@@ -4,6 +4,8 @@ use std::{
     collections::HashMap,
     error::Error,
     fmt::{Display, Write},
+    net::SocketAddr,
+    path::Path,
     str::FromStr,
     sync::{Arc, LazyLock},
 };
@@ -11,7 +13,7 @@ use std::{
 use axum::{
     Router,
     body::Body,
-    extract::{Query, Request, State},
+    extract::{ConnectInfo, Query, Request, State},
     handler::HandlerWithoutStateExt,
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, uri::InvalidUri},
     response::{Html, IntoResponse, NoContent, Redirect, Response},
@@ -25,19 +27,16 @@ use tower_http::{
     services::ServeDir,
 };
 
-use crate::{
-    CliOptions,
-    webring::{TraverseWebringError, Webring},
-};
+use crate::webring::{TraverseWebringError, Webring};
 
 static ERROR_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_error_template);
 
 /// Creates a [`Router`] with the routes for our application.
-pub fn create_router(cli: &CliOptions) -> Router<Arc<Webring>> {
+pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
     let mut router = Router::new()
         .nest_service(
             "/static",
-            ServeDir::new(&cli.static_dir).fallback(HandlerWithoutStateExt::into_service(
+            ServeDir::new(static_dir).fallback(HandlerWithoutStateExt::into_service(
                 async |request: Request| -> RouteError {
                     RouteError::FileNotFound(format!("/static{}", request.uri()))
                 },
@@ -48,6 +47,7 @@ pub fn create_router(cli: &CliOptions) -> Router<Arc<Webring>> {
             get(async || NoContent).layer(CorsLayer::new().allow_origin(Any)),
         )
         .route("/", get(serve_index))
+        .route("/visit", get(serve_visit))
         .route("/next", get(serve_next))
         // Support /prev and /previous as aliases of each other
         .route("/prev", get(serve_previous))
@@ -84,8 +84,44 @@ fn create_error_template() -> Tera {
     tera
 }
 
-async fn serve_index(State(webring): State<Arc<Webring>>) -> Result<Response, RouteError> {
+async fn serve_index(
+    State(webring): State<Arc<Webring>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> Result<Response, RouteError> {
+    let maybe_origin = get_origin_from_request(headers, params).ok();
+    webring.track_to_homepage_click(maybe_origin.as_ref(), addr.ip());
     Ok(Html(webring.homepage().await?.to_html().to_owned()).into_response())
+}
+
+/// Serve the `/visit` endpoint
+///
+/// For each request, this function:
+/// 1. Gets the authority for the webring member from a URL parameter
+/// 2. Simultaneously queries the webring for the member's URL and logs the request in the statistics
+/// 3. Redirects the user to the member's page
+async fn serve_visit(
+    State(webring): State<Arc<Webring>>,
+    Query(mut params): Query<HashMap<String, String>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> Result<Response, RouteError> {
+    let uri = match params.remove("member") {
+        Some(str) => match str.parse::<Uri>() {
+            Ok(uri) => uri,
+            Err(e) => {
+                return Err(RouteError::InvalidRedirectURI {
+                    uri: str,
+                    reason: e,
+                });
+            }
+        },
+        None => return Err(RouteError::MissingRedirectURI),
+    };
+
+    let actual_uri = webring.track_from_homepage_click(&uri, addr.ip())?;
+
+    Ok(Redirect::to(&actual_uri.to_string()).into_response())
 }
 
 /// Serve the `/next` endpoint.
@@ -100,9 +136,10 @@ async fn serve_next(
     State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<Response, RouteError> {
     let origin = get_origin_from_request(headers, params)?;
-    let page = webring.next_page(&origin)?;
+    let page = webring.next_page(&origin, addr.ip())?;
     Ok((
         // Set Vary: Referer so browsers will not cache responses for requests with different origins
         [(
@@ -126,9 +163,10 @@ async fn serve_previous(
     State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<Response, RouteError> {
     let origin = get_origin_from_request(headers, params)?;
-    let page = webring.prev_page(&origin)?;
+    let page = webring.prev_page(&origin, addr.ip())?;
     Ok((
         // Set Vary: Referer so browsers will not cache responses for requests with different origins
         [(
@@ -152,9 +190,10 @@ async fn serve_random(
     State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<Response, RouteError> {
     let maybe_origin = get_origin_from_request(headers, params).ok();
-    let page = webring.random_page(maybe_origin.as_ref())?;
+    let page = webring.random_page(maybe_origin.as_ref(), addr.ip())?;
     Ok((
         // Don't cache since this response can change for every request
         [(
@@ -228,8 +267,18 @@ enum RouteError {
         place: OriginUriLocation,
     },
 
+    #[error(r#"Redirect URI "{uri}" is invalid: {reason}."#)]
+    InvalidRedirectURI {
+        uri: String,
+        #[source]
+        reason: InvalidUri,
+    },
+
     #[error("Request doesn't indicate which site it originates from.")]
     MissingOriginURI,
+
+    #[error("Request doesn't indicate which site it it is redirecting to.")]
+    MissingRedirectURI,
 
     #[error("{0} contains data which is not valid UTF-8.")]
     HeaderToStr(OriginUriLocation),
@@ -265,7 +314,9 @@ impl IntoResponse for RouteError {
                 TraverseWebringError::NoAuthority(_) | TraverseWebringError::AuthorityNotFound(_),
             )
             | RouteError::InvalidOriginURI { .. }
+            | RouteError::InvalidRedirectURI { .. }
             | RouteError::MissingOriginURI
+            | RouteError::MissingRedirectURI
             | RouteError::HeaderToStr(_) => StatusCode::BAD_REQUEST,
             RouteError::RenderHomepage(_) => StatusCode::INTERNAL_SERVER_ERROR,
             RouteError::NoRoute(_) | RouteError::FileNotFound(_) => StatusCode::NOT_FOUND,
@@ -361,13 +412,31 @@ impl ResponseForPanic for PanicResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
+    use std::{net::SocketAddr, str::FromStr as _, sync::Arc};
 
-    use axum::{http::Uri, response::IntoResponse};
+    use axum::{
+        Router,
+        body::Body,
+        extract::ConnectInfo,
+        http::{Request, Uri},
+        response::IntoResponse,
+    };
+    use chrono::Utc;
     use eyre::eyre;
+    use http_body_util::BodyExt;
+    use reqwest::StatusCode;
+    use sarlacc::Intern;
+    use tempfile::{NamedTempFile, TempDir};
+    use tokio::fs;
+    use tower::ServiceExt;
     use tower_http::catch_panic::ResponseForPanic;
 
-    use super::{OriginUriLocation, PanicResponse, RouteError};
+    use crate::{
+        stats::{TIMEZONE, UNKNOWN_ORIGIN},
+        webring::Webring,
+    };
+
+    use super::{OriginUriLocation, PanicResponse, RouteError, create_router};
 
     /// Test rendering src/templates/error.html to make sure it won't panic at runtime.
     #[test]
@@ -392,5 +461,224 @@ mod tests {
     fn test_render_panic_response() {
         let mut pr = PanicResponse;
         let _ = pr.response_for_panic(Box::new("intentional panic"));
+    }
+
+    // Return the temporary files so that they don't go away
+    async fn app() -> (Router, Arc<Webring>, (NamedTempFile, TempDir)) {
+        let members_file = NamedTempFile::new().unwrap();
+        tokio::fs::write(
+            members_file.path(),
+            "
+henry — hrovnyak.gitlab.io — 123 — None
+kian — kasad.com — 456 — NonE
+cynthia — https://clementine.viridian.page — 789 — nONE
+??? — ws://refuse-the-r.ing — - — none
+",
+        )
+        .await
+        .unwrap();
+        let static_dir = TempDir::new().unwrap();
+        fs::write(static_dir.path().join("index.html"), "Hello homepage!")
+            .await
+            .unwrap();
+
+        let webring = Arc::new(
+            Webring::new(
+                members_file.path().to_owned(),
+                static_dir.path().to_owned(),
+                Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+                None,
+            )
+            .await
+            .unwrap(),
+        );
+
+        let router: Router = create_router(static_dir.path()).with_state(Arc::clone(&webring));
+
+        (router, webring, (members_file, static_dir))
+    }
+
+    #[tokio::test]
+    async fn index() {
+        let (router, webring, tmpfiles) = app().await;
+
+        let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
+
+        // Request `/`
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header("Referer", "kasad.com")
+                    .extension(ConnectInfo("1.2.3.5:433".parse::<SocketAddr>().unwrap()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = res.status();
+        let text = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec())
+            .unwrap();
+        assert_eq!("Hello homepage!", text);
+        assert_eq!(status, StatusCode::OK);
+        webring.assert_stat_entry(
+            (today, "kasad.com", "ring.purduehackers.com", "kasad.com"),
+            1,
+        );
+
+        drop(tmpfiles);
+    }
+
+    #[tokio::test]
+    async fn index_unknown_referer() {
+        let (router, webring, tmpfiles) = app().await;
+
+        let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
+
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header("Referer", "https://who.now/")
+                    .extension(ConnectInfo("1.2.3.2:433".parse::<SocketAddr>().unwrap()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = res.status();
+        let text = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec())
+            .unwrap();
+        assert_eq!("Hello homepage!", text);
+        assert_eq!(status, StatusCode::OK);
+        webring.assert_stat_entry(
+            (
+                today,
+                UNKNOWN_ORIGIN.as_str(),
+                "ring.purduehackers.com",
+                UNKNOWN_ORIGIN.as_str(),
+            ),
+            1,
+        );
+
+        drop(tmpfiles);
+    }
+
+    #[tokio::test]
+    async fn visit() {
+        let (router, webring, tmpfiles) = app().await;
+
+        let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
+
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/visit?member=clementine.viridian.page")
+                    .extension(ConnectInfo("5.4.3.2:80".parse::<SocketAddr>().unwrap()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res.headers().get("location").unwrap(),
+            "https://clementine.viridian.page/"
+        );
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        webring.assert_stat_entry(
+            (
+                today,
+                "ring.purduehackers.com",
+                "clementine.viridian.page",
+                "ring.purduehackers.com",
+            ),
+            1,
+        );
+
+        drop(tmpfiles);
+    }
+
+    #[tokio::test]
+    async fn visit_unknown_member() {
+        let (router, _, tmpfiles) = app().await;
+
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/visit?member=iamtheyeastofthoughtsandm.ind")
+                    .extension(ConnectInfo("5.4.3.2:80".parse::<SocketAddr>().unwrap()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        drop(tmpfiles);
+    }
+
+    #[tokio::test]
+    async fn next() {
+        let (router, _, tmpfiles) = app().await;
+
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/next?host=clementine.viridian.page")
+                    .extension(ConnectInfo("5.4.3.2:80".parse::<SocketAddr>().unwrap()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res.headers().get("location").unwrap(),
+            "ws://refuse-the-r.ing/"
+        );
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+        drop(tmpfiles);
+    }
+
+    #[tokio::test]
+    async fn prev() {
+        let (router, _, tmpfiles) = app().await;
+
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/prev?host=https://clementine.viridian.page")
+                    .header("Referer", "kasad.com")
+                    .extension(ConnectInfo("5.4.3.2:80".parse::<SocketAddr>().unwrap()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.headers().get("location").unwrap(), "kasad.com");
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+        drop(tmpfiles);
+    }
+
+    #[tokio::test]
+    async fn previous() {
+        let (router, _, tmpfiles) = app().await;
+
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/previous")
+                    .header("Referer", "kasad.com")
+                    .extension(ConnectInfo("5.4.3.2:80".parse::<SocketAddr>().unwrap()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.headers().get("location").unwrap(), "hrovnyak.gitlab.io");
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+        drop(tmpfiles);
     }
 }
