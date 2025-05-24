@@ -4,6 +4,7 @@ use axum::http::{
     Uri,
     uri::{Authority, PathAndQuery},
 };
+use sarlacc::Intern;
 use serde::Serialize;
 use tera::Tera;
 
@@ -13,13 +14,18 @@ pub struct Homepage {
 }
 
 impl Homepage {
-    pub async fn new(static_dir: &Path, members: &[MemberForHomepage]) -> eyre::Result<Self> {
+    pub async fn new(
+        static_dir: &Path,
+        base_address: Intern<Uri>,
+        members: &[MemberForHomepage],
+    ) -> eyre::Result<Self> {
         let index_template_path = static_dir.join("index.html");
         let template_content = tokio::fs::read_to_string(&index_template_path).await?;
         let mut tera = Tera::default();
         tera.add_raw_template("index.html", &template_content)?;
         let mut context = tera::Context::new();
         context.insert("members", members);
+        context.insert("base_addr", &SerializableUri::from(&*base_address));
         let html = tera.render("index.html", &context)?;
         Ok(Self { html })
     }
@@ -72,6 +78,7 @@ mod tests {
 
     use axum::http::Uri;
     use pretty_assertions::assert_eq;
+    use sarlacc::Intern;
     use tempfile::TempDir;
 
     use super::{Homepage, MemberForHomepage, SerializableUri};
@@ -83,7 +90,7 @@ mod tests {
         let template = r#"
 <table>
 {% for member in members -%}
-<tr><td>{{ member.name }}</td><a href="{{ member.website.href }}">{{ member.website.authority }}</a></td></tr>
+<tr><td>{{ member.name }}</td><a href="{{ base_addr.href }}visit?member={{ member.website.authority }}">{{ member.website.authority }}</a></td></tr>
 {% endfor -%}
 </table>
 "#;
@@ -104,14 +111,20 @@ mod tests {
                 check_successful: true,
             },
         ];
-        let homepage = Homepage::new(tmpdir.path(), &members).await.unwrap();
+        let homepage = Homepage::new(
+            tmpdir.path(),
+            Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            &members,
+        )
+        .await
+        .unwrap();
         let html = homepage.to_html();
 
         assert_eq!(
             r#"
 <table>
-<tr><td>kian</td><a href="https:&#x2F;&#x2F;kasad.com&#x2F;">kasad.com</a></td></tr>
-<tr><td>henry</td><a href="https:&#x2F;&#x2F;hrovnyak.gitlab.io&#x2F;">hrovnyak.gitlab.io</a></td></tr>
+<tr><td>kian</td><a href="https:&#x2F;&#x2F;ring.purduehackers.com&#x2F;visit?member=kasad.com">kasad.com</a></td></tr>
+<tr><td>henry</td><a href="https:&#x2F;&#x2F;ring.purduehackers.com&#x2F;visit?member=hrovnyak.gitlab.io">hrovnyak.gitlab.io</a></td></tr>
 </table>
 "#,
             html

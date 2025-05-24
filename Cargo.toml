@@ -20,17 +20,18 @@ match-on-vec-items = "allow"
 axum = "0.8.4"
 chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.38", features = ["derive"] }
-dashmap = { version = "6.1.0", features = ["serde"] }
 eyre = "0.6.12"
 ftail = "0.3.0"
 futures = "0.3.31"
 html-escape = "0.2.13"
 log = "0.4.27"
 notify = "8.0.0"
+papaya = { version = "0.2.1", features = ["serde"] }
 quick-xml = { version = "0.37.5", features = ["async-tokio"] }
 rand = "0.9.1"
 reqwest = { version = "0.12.15", features = ["stream", "json"] }
 same-file = "1.0.6"
+sarlacc = "0.1.3"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 surge-ping = "0.8.2"
@@ -41,5 +42,7 @@ tokio-util = { version = "0.7.15", features = ["io"] }
 tower-http = { version = "0.6.4", features = ["cors", "fs", "catch-panic"] }
 
 [dev-dependencies]
+http-body-util = "0.1.3"
 pretty_assertions = "1.4.1"
 tempfile = "3.20.0"
+tower = "0.5.2"
