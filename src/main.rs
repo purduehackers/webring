@@ -195,9 +195,15 @@ async fn main() -> ExitCode {
         .into_make_service_with_connect_info::<SocketAddr>();
     let bind_addr = &cli.listen_addr;
     match tokio::net::TcpListener::bind(bind_addr).await {
-        // Unwrapping this is fine because it will never resolve
         Ok(listener) => {
-            log::info!("Listening on http://{bind_addr}");
+            match listener.local_addr() {
+                Ok(addr) => log::info!("Listening on http://{addr}"),
+                Err(err) => {
+                    log::info!("Listening...");
+                    log::warn!("Failed to get the address we're listening on: {err}");
+                }
+            }
+            // Unwrapping this is fine because it will never resolve
             axum::serve(listener, router).await.unwrap();
         }
         Err(err) => {
