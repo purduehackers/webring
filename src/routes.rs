@@ -15,8 +15,8 @@ use axum::{
     body::Body,
     extract::{ConnectInfo, Query, Request, State},
     handler::HandlerWithoutStateExt,
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, uri::InvalidUri},
-    response::{Html, IntoResponse, NoContent, Redirect, Response},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header, uri::InvalidUri},
+    response::{Html, IntoResponse, NoContent, Response},
     routing::get,
 };
 use log::warn;
@@ -84,6 +84,21 @@ fn create_error_template() -> Tera {
     tera
 }
 
+/// Create an HTTP 303 redirect to the given URI with HTML content describing the redirect.
+fn redirect_with_content(to: &Uri) -> impl IntoResponse + use<> {
+    let uri_str = to.to_string();
+    let html = format!(
+        r#"<!DOCTYPE html><html><body>Redirecting you to <a href="{}">{}</a>...</body></html>"#,
+        html_escape::encode_quoted_attribute(&uri_str),
+        html_escape::encode_text(&uri_str),
+    );
+    (
+        StatusCode::SEE_OTHER,
+        [(header::LOCATION, uri_str)],
+        Html(html),
+    )
+}
+
 async fn serve_index(
     State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
@@ -105,7 +120,7 @@ async fn serve_visit(
     State(webring): State<Arc<Webring>>,
     Query(mut params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-) -> Result<Response, RouteError> {
+) -> Result<impl IntoResponse, RouteError> {
     let uri = match params.remove("member") {
         Some(str) => match str.parse::<Uri>() {
             Ok(uri) => uri,
@@ -121,7 +136,7 @@ async fn serve_visit(
 
     let actual_uri = webring.track_from_homepage_click(&uri, addr.ip())?;
 
-    Ok(Redirect::to(&actual_uri.to_string()).into_response())
+    Ok(redirect_with_content(&actual_uri))
 }
 
 /// Serve the `/next` endpoint.
@@ -137,7 +152,7 @@ async fn serve_next(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-) -> Result<Response, RouteError> {
+) -> Result<impl IntoResponse, RouteError> {
     let origin = get_origin_from_request(headers, params)?;
     let page = webring.next_page(&origin, addr.ip())?;
     Ok((
@@ -146,9 +161,8 @@ async fn serve_next(
             HeaderName::from_static("vary"),
             HeaderValue::from_static("Referer"),
         )],
-        Redirect::to(page.to_string().as_str()),
-    )
-        .into_response())
+        redirect_with_content(&page),
+    ))
 }
 
 /// Serve the `/previous` and `/prev` endpoints.
@@ -164,7 +178,7 @@ async fn serve_previous(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-) -> Result<Response, RouteError> {
+) -> Result<impl IntoResponse, RouteError> {
     let origin = get_origin_from_request(headers, params)?;
     let page = webring.prev_page(&origin, addr.ip())?;
     Ok((
@@ -173,9 +187,8 @@ async fn serve_previous(
             HeaderName::from_static("vary"),
             HeaderValue::from_static("Referer"),
         )],
-        Redirect::to(page.to_string().as_str()),
-    )
-        .into_response())
+        redirect_with_content(&page),
+    ))
 }
 
 /// Serve the `/random` endpoint.
@@ -191,7 +204,7 @@ async fn serve_random(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-) -> Result<Response, RouteError> {
+) -> Result<impl IntoResponse, RouteError> {
     let maybe_origin = get_origin_from_request(headers, params).ok();
     let page = webring.random_page(maybe_origin.as_ref(), addr.ip())?;
     Ok((
@@ -200,9 +213,8 @@ async fn serve_random(
             HeaderName::from_static("cache-control"),
             HeaderValue::from_static("no-cache, no-store"),
         )],
-        Redirect::to(page.to_string().as_str()),
-    )
-        .into_response())
+        redirect_with_content(&page),
+    ))
 }
 
 /// Get a URI representing the origin of the request.
@@ -418,17 +430,18 @@ mod tests {
         Router,
         body::Body,
         extract::ConnectInfo,
-        http::{Request, Uri},
+        http::{Request, Uri, header},
         response::IntoResponse,
     };
     use chrono::Utc;
     use eyre::eyre;
     use http_body_util::BodyExt;
+    use pretty_assertions::assert_ne;
     use reqwest::StatusCode;
     use sarlacc::Intern;
     use tempfile::{NamedTempFile, TempDir};
     use tokio::fs;
-    use tower::ServiceExt;
+    use tower::{Service, ServiceExt};
     use tower_http::catch_panic::ResponseForPanic;
 
     use crate::{
@@ -680,5 +693,35 @@ cynthia — https://clementine.viridian.page — 789 — nONE
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
         drop(tmpfiles);
+    }
+
+    #[tokio::test]
+    async fn redirect_contains_body() {
+        let paths = [
+            "/visit?member=kasad.com",
+            "/next?host=kasad.com",
+            "/prev?host=kasad.com",
+            "/previous?host=kasad.com",
+            "/random",
+        ];
+        let (router, _webring, _tmpfiles) = app().await;
+        let mut s = router.into_service::<Body>();
+        for path in paths {
+            let res = s
+                .call(
+                    Request::builder()
+                        .uri(path)
+                        .extension(ConnectInfo::<SocketAddr>("5.4.3.2:38452".parse().unwrap()))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                res.headers().get(header::CONTENT_TYPE).unwrap(),
+                "text/html; charset=utf-8"
+            );
+            assert_ne!(res.headers().get(header::CONTENT_LENGTH).unwrap(), "0");
+        }
     }
 }
