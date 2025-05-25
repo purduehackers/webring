@@ -62,7 +62,7 @@ pub struct NetworkTable {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct LoggingTable {
     /// Log verbosity
-    #[serde(with = "LevelFilterWrapper")]
+    #[serde(alias = "level", with = "LevelFilterWrapper")]
     pub verbosity: LevelFilter,
 
     /// File to print logs to in addition to the console

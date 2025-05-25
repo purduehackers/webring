@@ -31,8 +31,9 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CheckLevel {
+    #[serde(alias = "off")]
     None,
-    #[serde(rename = "online")]
+    #[serde(rename = "online", alias = "up")]
     JustOnline,
     #[serde(rename = "links", alias = "full")]
     ForLinks,
