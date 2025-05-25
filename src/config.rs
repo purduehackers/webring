@@ -20,7 +20,7 @@ use crate::{discord::Snowflake, webring::CheckLevel};
 pub struct Config {
     pub webring: WebringTable,
     pub network: NetworkTable,
-    #[serde(default = "default_logging_table")]
+    #[serde(default)]
     pub logging: LoggingTable,
     pub discord: Option<DiscordTable>,
 
@@ -67,6 +67,19 @@ pub struct LoggingTable {
 
     /// File to print logs to in addition to the console
     pub log_file: Option<PathBuf>,
+}
+
+impl Default for LoggingTable {
+    fn default() -> Self {
+        Self {
+            verbosity: if cfg!(debug_assertions) {
+                LevelFilter::Debug
+            } else {
+                LevelFilter::Info
+            },
+            log_file: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -132,19 +145,6 @@ impl From<LevelFilterWrapper> for LevelFilter {
 /// Get default webring base address.
 fn default_address() -> Intern<Uri> {
     Intern::new(Uri::from_static(env!("CARGO_PKG_HOMEPAGE")))
-}
-
-/// Get default log level.
-fn default_logging_table() -> LoggingTable {
-    let level = if cfg!(debug_assertions) {
-        LevelFilter::Debug
-    } else {
-        LevelFilter::Info
-    };
-    LoggingTable {
-        verbosity: level,
-        log_file: None,
-    }
 }
 
 // Deserialize an `Intern<Uri>` from a string value
