@@ -36,7 +36,7 @@ async fn main() -> ExitCode {
 
     // Load config
     let cfg = match Config::parse_from_file(&cli.config_file).await {
-        Ok(cfg) => cfg,
+        Ok(cfg) => Arc::new(cfg),
         Err(err) => {
             eprintln!("Failed to read configuration file: {err}");
             return ExitCode::FAILURE;
@@ -74,16 +74,10 @@ async fn main() -> ExitCode {
     }
 
     webring.enable_ip_pruning(chrono::Duration::hours(1));
-
-    // // Create member file watcher
-    // if let Err(err) = webring.enable_reloading() {
-    //     log::error!("Unable to watch member file for changes: {err}");
-    //     log::warn!("Webring will not reload automatically.");
-    // }
-    // log::info!(
-    //     "Watching {} for changes",
-    //     cfg.webring.members_file.display()
-    // );
+    if let Err(err) = webring.enable_reloading(&cli.config_file) {
+        log::error!("Failed to watch configuration files for changes: {err}");
+        log::warn!("The webring will not be reloaded when files change.");
+    }
 
     // Start server
     let router = create_router(&cfg.webring.static_dir)
