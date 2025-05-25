@@ -38,7 +38,9 @@ happens:
 | No       | No          | Setting is empty, i.e. has no value |
 | No       | Yes         | Default value will be used          |
 
-## `webring` table
+## Available settings
+
+### `webring` table
 
 This table contains settings pertaining to the webring server.
 
@@ -54,7 +56,7 @@ base-url = "https://ring.purduehackers.com"
 static-dir = "static"
 ```
 
-### `base-url`
+#### `base-url`
 
 Defines the URL of the webring itself. This is used mainly when checking
 members' sites to ensure they contain the correct links. The webring must know
@@ -64,7 +66,7 @@ This URL must not be relative, i.e. it must have a valid authority (a.k.a.
 "host" or "domain"). For example, `file:///ring`, while a valid URL, will be
 rejected.
 
-### `static-dir`
+#### `static-dir`
 
 The directory from which static content will be served. Files in this directory
 will be served with the path prefix `/static`. E.g. if the value of `static-dir`
@@ -80,7 +82,7 @@ run, not necessarily relative to the location of the configuration file.
 However, it is recommended to run the webring in the directory containing the
 configuration file, so that there is no confusion about relative paths.
 
-## `network` table
+### `network` table
 
 Settings pertaining to how the webring communicates over the network.
 
@@ -88,7 +90,7 @@ Settings pertaining to how the webring communicates over the network.
 | ---           | ---      | ---                | ---     |
 | `listen-addr` | yes      | string (`ip:port`) | none    |
 
-### `listen-addr`
+#### `listen-addr`
 
 Specifies the address on which the webring will listen.
 
@@ -103,7 +105,7 @@ details on the format, see [here for IPv4][v4] and [here for IPv6][v6].
 You probably want to use the address `0.0.0.0` or `[::]`, meaning listen on all
 available IPv4 or IPv6 interfaces, respectively.
 
-## `logging` table
+### `logging` table
 
 Controls the webring's logging behavior.
 
@@ -118,7 +120,7 @@ Example:
 level = "info"
 ```
 
-### `verbosity` (alias `level`)
+#### `verbosity` (alias `level`)
 
 Sets the minimum severity to log. Messages with this severity or higher will be
 logged, and those with lower severity will be suppressed.
@@ -128,13 +130,13 @@ printed, and messages at `trace` and `debug` will not.
 
 The value `off` means no messages will be printed; logging is disabled.
 
-### `log-file`
+#### `log-file`
 
 Specifies a path to a file to write logs to in addition to the standard error
 stream. New log lines will be appended to the file; the webring will never
 truncate the file. The file will be created if it does not exist.
 
-## `discord` table
+### `discord` table
 
 Controls the Discord integration.
 
@@ -142,7 +144,7 @@ Controls the Discord integration.
 | ---           | ---      | ---          | ---     |
 | `webhook-url` | no       | string (URL) | none    |
 
-### `webhook-url`
+#### `webhook-url`
 
 Sets the URL of the Discord webhook, which will be executed to send messages.
 This must be the full URL of an [Execute Webhook API endpoint][webhook].
@@ -153,7 +155,7 @@ whichever server and channel the webhook is created for.
 
 [webhook]: https://discord.com/developers/docs/resources/webhook#execute-webhook
 
-## `members` table
+### `members` table
 
 This table is a little different; instead of unique settings, it contains the
 list of the webring's members. Each key in this table is the name of a member,
@@ -198,11 +200,11 @@ Examples (all are equivalent):
   members.henry.check-level = "online"
   ```
 
-### `url`
+#### `url`
 
 The URL of the member's site.
 
-### `discord-id`
+#### `discord-id`
 
 The member's Discord user ID. Note that this is *not* their username, but rather
 is a number. See [this article][discord-user-id] for how to find someone's user
@@ -214,12 +216,12 @@ If unset, this member will not be notified on Discord when their site fails chec
 
 See [the `discord` table](#discord-table) for more on the Discord integration.
 
-### `check-level`
+#### `check-level`
 
 The level of check to perform on this member's site. Checks are performed on
 every site before users are sent there. E.g. if the user requests the next site
 in the ring coming from **A**, and site **B** is not online, **B** will be
-silently skipped and the user will be sent to the next passing site, e.g. **C**.
+silently skipped, and the user will be sent to the next passing site, e.g. **C**.
 
 The options are:
 - `off` or `none`: No checks are performed. The site is considered to always be
@@ -233,4 +235,16 @@ The options are:
   - `<RING_BASE_URL>/prev` or `<RING_BASE_URL>/previous` (with optional `?host=` parameter)
   - `<RING_BASE_URL>/next` (with optional `?host=` parameter)
 
-  If any of these links is missing, the site fails the check.
+  If any of these links is missing, the site fails the check. Additionally,
+  elements of any kind with a `data-phwebring` attribute containing the value
+  `home`, `prev`/`previous`, or `next` will be accepted instead of a link
+  element.
+
+## Live reloading
+
+If the configuration file is changed while the webring is running, this change
+will be detected, and the webring will attempt to re-load the member list.
+**Only the `members` table is re-loaded; other changes will not be applied.**
+
+If the updated configuration file is invalid, an error will be logged and the
+update will be ignored, leaving the webring running the old configuration.
