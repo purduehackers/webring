@@ -5,7 +5,7 @@ use lol_html::{
 use std::{
     fmt::{Display, Write as _},
     sync::{
-        Mutex,
+        LazyLock, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -15,7 +15,7 @@ use axum::http::{Uri, uri::Scheme};
 use chrono::Utc;
 use futures::TryStreamExt;
 use log::{error, info};
-use reqwest::StatusCode;
+use reqwest::{Client, StatusCode};
 use sarlacc::Intern;
 use tokio::sync::RwLock;
 use tokio_util::io::StreamReader;
@@ -117,11 +117,18 @@ async fn check_impl(
     check_level: CheckLevel,
     base_address: Intern<Uri>,
 ) -> Option<CheckFailure> {
+    static CLIENT: LazyLock<Client> = LazyLock::new(|| {
+        Client::builder()
+            .user_agent("phwebring")
+            .build()
+            .expect("Creating the HTTP client should not fail")
+    });
+
     if check_level == CheckLevel::None {
         return None;
     }
 
-    let response = match reqwest::get(website.to_string()).await {
+    let response = match CLIENT.get(website.to_string()).send().await {
         Ok(response) => response,
         Err(err) => return Some(CheckFailure::Connection(err)),
     };
@@ -375,7 +382,7 @@ mod tests {
     use reqwest::StatusCode;
     use sarlacc::Intern;
 
-    use super::{CheckFailure, CheckLevel, MissingLinks, scan_for_links};
+    use super::{CheckFailure, CheckLevel, MissingLinks, check, scan_for_links};
 
     async fn assert_links_gives(
         base_address: &'static str,
@@ -631,5 +638,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn kians_site() {
+        let base = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
+        assert!(
+            check(
+                &Uri::from_static("https://kasad.com"),
+                CheckLevel::ForLinks,
+                base,
+            )
+            .await
+            .is_none()
+        );
     }
 }
