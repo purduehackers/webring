@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     net::IpAddr,
     path::{Path, PathBuf},
     sync::{
@@ -102,29 +101,18 @@ impl Member {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-struct WebringData {
-    members_table: HashMap<Intern<Authority>, usize>,
-    ordering: Vec<Member>,
-}
+type MemberMap = IndexMap<Intern<Authority>, Member>;
 
-impl From<&IndexMap<String, MemberSpec>> for WebringData {
-    fn from(value: &IndexMap<String, MemberSpec>) -> Self {
-        let mut members_table = HashMap::with_capacity(value.len());
-        let mut ordering = Vec::with_capacity(value.len());
-
-        for (name, spec) in value {
+/// Constructs a [`MemberMap`] from the `members` table of a [`Config`] object.
+fn member_map_from_config_table(config_table: &IndexMap<String, MemberSpec>) -> MemberMap {
+    config_table
+        .into_iter()
+        .map(|(name, spec)| {
             let authority = Intern::new(spec.uri().authority().unwrap().clone());
-            ordering.push(Member::from((name.as_str(), spec)));
-            let index = ordering.len() - 1;
-            members_table.insert(authority, index);
-        }
-
-        Self {
-            members_table,
-            ordering,
-        }
-    }
+            let member = Member::from((name.as_str(), spec));
+            (authority, member)
+        })
+        .collect()
 }
 
 /// The data structure underlying a webring. Implements the core webring functionality.
@@ -132,7 +120,7 @@ impl From<&IndexMap<String, MemberSpec>> for WebringData {
 pub struct Webring {
     // https://docs.rs/tokio/latest/tokio/sync/struct.Mutex.html#which-kind-of-mutex-should-you-use
     // This is a good case for std locks because we will never need to hold it across an await
-    inner: RwLock<WebringData>,
+    members: RwLock<MemberMap>,
     // This one we would like to hold across awaits
     homepage: AsyncRwLock<Option<Arc<Homepage>>>,
     static_dir_path: PathBuf,
@@ -151,7 +139,7 @@ impl Webring {
     /// performed using [`check_members()`][Self::check_members].
     pub fn new(config: &Config) -> Webring {
         Webring {
-            inner: RwLock::new(WebringData::from(&config.members)),
+            members: RwLock::new(member_map_from_config_table(&config.members)),
             static_dir_path: config.webring.static_dir.clone(),
             homepage: AsyncRwLock::new(None),
             stats: Arc::new(Stats::new()),
@@ -173,26 +161,22 @@ impl Webring {
     ///
     /// Useful for updating the webring without restarting the server.
     pub async fn update_members_and_check(&self, member_specs: &IndexMap<String, MemberSpec>) {
-        let mut new_members = WebringData::from(member_specs);
+        let mut new_members = member_map_from_config_table(member_specs);
         let mut tasks = FuturesUnordered::new();
 
         {
-            let old_members = self.inner.read().unwrap();
+            let old_members = self.members.read().unwrap();
 
-            for (name, idx) in &new_members.members_table {
-                match old_members.members_table.get(name) {
-                    Some(old_idx) => {
-                        let check_successful =
-                            Arc::clone(&old_members.ordering[*old_idx].check_successful);
-                        new_members.ordering[*idx].check_successful = check_successful;
+            for (name, new_member) in &mut new_members {
+                match old_members.get(name) {
+                    Some(old_member) => {
+                        new_member.check_successful = Arc::clone(&old_member.check_successful);
                     }
                     None => {
-                        tasks.push(
-                            new_members.ordering[*idx].check_and_store_and_optionally_notify(
-                                self.base_address,
-                                self.notifier.as_ref().map(Arc::clone),
-                            ),
-                        );
+                        tasks.push(new_member.check_and_store_and_optionally_notify(
+                            self.base_address,
+                            self.notifier.as_ref().map(Arc::clone),
+                        ));
                     }
                 }
             }
@@ -201,19 +185,18 @@ impl Webring {
         // Wait for all tasks
         while tasks.next().await.is_some() {}
 
-        *self.inner.write().unwrap() = new_members;
+        *self.members.write().unwrap() = new_members;
         *self.homepage.write().await = None;
     }
 
     /// Query everyone's webpages and check them according to their respective check levels.
     pub async fn check_members(&self) {
         let mut tasks = self
-            .inner
+            .members
             .read()
             .unwrap()
-            .ordering
             .iter()
-            .map(|member| {
+            .map(|(_, member)| {
                 member.check_and_store_and_optionally_notify(
                     self.base_address,
                     self.notifier.as_ref().map(Arc::clone),
@@ -238,12 +221,12 @@ impl Webring {
     fn member_idx_and_lock(
         &self,
         uri: &Uri,
-    ) -> Result<(usize, Intern<Authority>, RwLockReadGuard<'_, WebringData>), TraverseWebringError>
+    ) -> Result<(usize, Intern<Authority>, RwLockReadGuard<'_, MemberMap>), TraverseWebringError>
     {
         let interned = Self::get_authority(uri)?;
-        let inner = self.inner.read().unwrap();
+        let inner = self.members.read().unwrap();
         Ok((
-            *inner.members_table.get(&interned).ok_or_else(|| {
+            inner.get_index_of(&interned).ok_or_else(|| {
                 TraverseWebringError::AuthorityNotFound(uri.authority().unwrap().to_owned())
             })?,
             interned,
@@ -256,16 +239,15 @@ impl Webring {
         let (mut idx, authority, inner) = self.member_idx_and_lock(uri)?;
 
         // -1 to avoid jumping all the way around the ring to the same page
-        for _ in 0..inner.ordering.len() - 1 {
+        for _ in 0..inner.len() - 1 {
             idx += 1;
-            if idx == inner.ordering.len() {
+            if idx == inner.len() {
                 idx = 0;
             }
 
-            if inner.ordering[idx].check_successful.load(Ordering::Relaxed) {
-                self.stats
-                    .redirected(ip, authority, inner.ordering[idx].authority);
-                return Ok(inner.ordering[idx].website);
+            if inner[idx].check_successful.load(Ordering::Relaxed) {
+                self.stats.redirected(ip, authority, inner[idx].authority);
+                return Ok(inner[idx].website);
             }
         }
 
@@ -279,16 +261,15 @@ impl Webring {
         let (mut idx, authority, inner) = self.member_idx_and_lock(uri)?;
 
         // -1 to avoid jumping all the way around the ring to the same page
-        for _ in 0..inner.ordering.len() - 1 {
+        for _ in 0..inner.len() - 1 {
             if idx == 0 {
-                idx = inner.ordering.len();
+                idx = inner.len();
             }
             idx -= 1;
 
-            if inner.ordering[idx].check_successful.load(Ordering::Relaxed) {
-                self.stats
-                    .redirected(ip, authority, inner.ordering[idx].authority);
-                return Ok(inner.ordering[idx].website);
+            if inner[idx].check_successful.load(Ordering::Relaxed) {
+                self.stats.redirected(ip, authority, inner[idx].authority);
+                return Ok(inner[idx].website);
             }
         }
 
@@ -312,10 +293,10 @@ impl Webring {
         let (maybe_idx, maybe_authority, inner) =
             match maybe_origin.and_then(|origin| self.member_idx_and_lock(origin).ok()) {
                 Some((idx, authority, inner)) => (Some(idx), Some(authority), inner),
-                None => (None, None, self.inner.read().unwrap()),
+                None => (None, None, self.members.read().unwrap()),
             };
 
-        let mut range = (0..inner.ordering.len()).collect::<Vec<_>>();
+        let mut range = (0..inner.len()).collect::<Vec<_>>();
         let mut range = &mut *range;
 
         let mut rng = rand::rng();
@@ -324,18 +305,14 @@ impl Webring {
             let (chosen, rest) = range.partial_shuffle(&mut rng, 1);
             let chosen = chosen[0];
 
-            if maybe_idx != Some(chosen)
-                && inner.ordering[chosen]
-                    .check_successful
-                    .load(Ordering::Relaxed)
-            {
+            if maybe_idx != Some(chosen) && inner[chosen].check_successful.load(Ordering::Relaxed) {
                 self.stats.redirected(
                     ip,
                     maybe_authority.unwrap_or_else(|| *UNKNOWN_ORIGIN),
-                    inner.ordering[chosen].authority,
+                    inner[chosen].authority,
                 );
 
-                return Ok(inner.ordering[chosen].website);
+                return Ok(inner[chosen].website);
             }
 
             range = rest;
@@ -364,7 +341,7 @@ impl Webring {
 
         self.stats.redirected(ip, self.base_authority, authority);
 
-        Ok(inner.ordering[idx].website)
+        Ok(inner[idx].website)
     }
 
     /// Return a server-side rendered homepage.
@@ -385,12 +362,11 @@ impl Webring {
             }
 
             let members = {
-                let inner = self.inner.read().unwrap();
+                let inner = self.members.read().unwrap();
 
                 inner
-                    .ordering
                     .iter()
-                    .map(|member_info| MemberForHomepage {
+                    .map(|(_, member_info)| MemberForHomepage {
                         name: member_info.name.clone(),
                         website: member_info.website.as_ref().into(),
                         check_successful: member_info.check_successful.load(Ordering::Relaxed),
@@ -589,7 +565,7 @@ pub enum TraverseWebringError {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{HashMap, HashSet},
+        collections::HashSet,
         fs::{File, OpenOptions},
         io::Write as _,
         path::PathBuf,
@@ -621,7 +597,7 @@ mod tests {
     impl Default for Webring {
         fn default() -> Self {
             Webring {
-                inner: RwLock::default(),
+                members: RwLock::default(),
                 homepage: AsyncRwLock::default(),
                 static_dir_path: PathBuf::default(),
                 file_watcher: OnceLock::new(),
@@ -698,17 +674,10 @@ mod tests {
         let webring = Webring::new(&config);
 
         {
-            let inner = webring.inner.read().unwrap();
-
-            let mut expected_table = HashMap::new();
-            expected_table.insert(Intern::new("hrovnyak.gitlab.io".parse().unwrap()), 0);
-            expected_table.insert(Intern::new("kasad.com".parse().unwrap()), 1);
-            expected_table.insert(Intern::new("clementine.viridian.page".parse().unwrap()), 2);
-            expected_table.insert(Intern::new("refuse-the-r.ing".parse().unwrap()), 3);
-
-            assert_eq!(inner.members_table, expected_table);
-
-            let expected_ordering = vec![
+            let inner = webring.members.read().unwrap();
+            let mut expected = IndexMap::new();
+            expected.insert(
+                Intern::new("hrovnyak.gitlab.io".parse().unwrap()),
                 Member {
                     name: "henry".to_owned(),
                     website: Intern::new(Uri::from_static("hrovnyak.gitlab.io")),
@@ -717,6 +686,9 @@ mod tests {
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
+            );
+            expected.insert(
+                Intern::new("kasad.com".parse().unwrap()),
                 Member {
                     name: "kian".to_owned(),
                     website: Intern::new(Uri::from_static("kasad.com")),
@@ -725,6 +697,9 @@ mod tests {
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
+            );
+            expected.insert(
+                Intern::new("clementine.viridian.page".parse().unwrap()),
                 Member {
                     name: "cynthia".to_owned(),
                     website: Intern::new(Uri::from_static("https://clementine.viridian.page")),
@@ -733,6 +708,9 @@ mod tests {
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
+            );
+            expected.insert(
+                Intern::new("refuse-the-r.ing".parse().unwrap()),
                 Member {
                     name: "???".to_owned(),
                     website: Intern::new(Uri::from_static("ws://refuse-the-r.ing")),
@@ -741,8 +719,8 @@ mod tests {
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
-            ];
-            assert_eq!(inner.ordering, expected_ordering);
+            );
+            assert_eq!(*inner, expected);
         }
 
         let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
@@ -790,7 +768,7 @@ mod tests {
             ))),
         );
 
-        webring.inner.write().unwrap().ordering[0]
+        webring.members.write().unwrap()[0]
             .check_successful
             .store(false, Ordering::Relaxed);
 
@@ -875,7 +853,7 @@ mod tests {
         webring.assert_next("kasad.com", Ok("https://clementine.viridian.page"));
 
         for i in 0..5 {
-            webring.inner.write().unwrap().ordering[i]
+            webring.members.write().unwrap()[i]
                 .check_successful
                 .store(false, Ordering::Relaxed);
         }
@@ -894,7 +872,7 @@ mod tests {
             Err(TraverseWebringError::AllMembersFailing),
         );
 
-        webring.inner.write().unwrap().ordering[3]
+        webring.members.write().unwrap()[3]
             .check_successful
             .store(true, Ordering::Relaxed);
 
@@ -998,7 +976,7 @@ mod tests {
     async fn test_reload_config() {
         let (config_file, _static_dir, webring) = setup();
         webring.enable_reloading(config_file.path()).unwrap();
-        assert_eq!(1, webring.inner.read().unwrap().ordering.len());
+        assert_eq!(1, webring.members.read().unwrap().len());
         write!(
             OpenOptions::new()
                 .append(true)
@@ -1009,7 +987,7 @@ mod tests {
         .unwrap();
         // Wait for a bit just in case the event takes some time to process
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert_eq!(2, webring.inner.read().unwrap().ordering.len());
+        assert_eq!(2, webring.members.read().unwrap().len());
     }
 
     #[tokio::test]
