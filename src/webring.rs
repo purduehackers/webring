@@ -10,10 +10,11 @@ use std::{
 
 use axum::http::{Uri, uri::Authority};
 use chrono::TimeDelta;
-use futures::{StreamExt, stream::FuturesUnordered};
+use futures::{StreamExt, future::join, stream::FuturesUnordered};
 use indexmap::IndexMap;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use rand::seq::SliceRandom;
+use tokio::sync::RwLock as AsyncRwLock;
 
 use log::{error, warn};
 use sarlacc::Intern;
@@ -133,13 +134,14 @@ pub struct Webring {
     // This is a good case for std locks because we will never need to hold it across an await
     inner: RwLock<WebringData>,
     // This one we would like to hold across awaits
-    homepage: tokio::sync::RwLock<Option<Arc<Homepage>>>,
+    homepage: AsyncRwLock<Option<Arc<Homepage>>>,
     static_dir_path: PathBuf,
     file_watcher: OnceLock<RecommendedWatcher>,
     base_address: Intern<Uri>,
     base_authority: Intern<Authority>,
     notifier: Option<Arc<DiscordNotifier>>,
     stats: Arc<Stats>,
+    config: Arc<AsyncRwLock<Option<Config>>>,
 }
 
 impl Webring {
@@ -151,7 +153,7 @@ impl Webring {
         Webring {
             inner: RwLock::new(WebringData::from(&config.members)),
             static_dir_path: config.webring.static_dir.clone(),
-            homepage: tokio::sync::RwLock::new(None),
+            homepage: AsyncRwLock::new(None),
             stats: Arc::new(Stats::new()),
             file_watcher: OnceLock::default(),
             base_address: config.webring.base_url(),
@@ -162,6 +164,7 @@ impl Webring {
                 .map(DiscordNotifier::new)
                 .map(Arc::new),
             base_authority: Intern::from_ref(config.webring.base_url().authority().unwrap()),
+            config: Arc::new(AsyncRwLock::new(Some(config.clone()))),
         }
     }
 
@@ -482,10 +485,25 @@ impl Webring {
                                             .await
                                         {
                                             Ok(new_config) => {
-                                                // If successful, update webring from new member list
-                                                webring
-                                                    .update_members_and_check(&new_config.members)
-                                                    .await;
+                                                // Do these tasks concurrently since they don't
+                                                // depend on each other.
+                                                join(
+                                                    async {
+                                                        // If fields other than the members were changed,
+                                                        // warn about it.
+                                                        let old_config = webring.config.read().await;
+                                                        if old_config.as_ref().is_some_and(|old| Config::diff_settings(old, &new_config)) {
+                                                            log::warn!("Some non-member settings were changed. These will not be applied until the webring is restarted.");
+                                                        }
+                                                    },
+                                                    async {
+                                                        // Update webring from new member list
+                                                        webring
+                                                            .update_members_and_check(&new_config.members)
+                                                            .await;
+                                                    }
+                                                ).await;
+                                                *webring.config.write().await = Some(new_config);
                                             }
                                             Err(err) => {
                                                 log::error!(
@@ -589,6 +607,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use sarlacc::Intern;
     use tempfile::{NamedTempFile, TempDir};
+    use tokio::sync::RwLock as AsyncRwLock;
 
     use crate::{
         config::{Config, MemberSpec},
@@ -603,13 +622,14 @@ mod tests {
         fn default() -> Self {
             Webring {
                 inner: RwLock::default(),
-                homepage: tokio::sync::RwLock::default(),
+                homepage: AsyncRwLock::default(),
                 static_dir_path: PathBuf::default(),
                 file_watcher: OnceLock::new(),
                 base_address: Intern::default(),
                 base_authority: Intern::new("ring.purduehackers.com".parse().unwrap()),
                 notifier: None,
                 stats: Arc::default(),
+                config: Arc::new(AsyncRwLock::new(None)),
             }
         }
     }

@@ -244,7 +244,7 @@ The options are:
 
 If the configuration file is changed while the webring is running, this change
 will be detected, and the webring will attempt to re-load the member list.
-**Only the `members` table is re-loaded; other changes will not be applied.**
+Only the `members` table is re-loaded; other changes will not be applied.
 
 If the updated configuration file is invalid, an error will be logged and the
 update will be ignored, leaving the webring running the old configuration.
