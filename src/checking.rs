@@ -119,7 +119,12 @@ async fn check_impl(
 ) -> Option<CheckFailure> {
     static CLIENT: LazyLock<Client> = LazyLock::new(|| {
         Client::builder()
-            .user_agent("phwebring")
+            .user_agent(format!(
+                "{}/{} (Purdue Hackers webring, +{})",
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION"),
+                env!("CARGO_PKG_REPOSITORY")
+            ))
             .build()
             .expect("Creating the HTTP client should not fail")
     });

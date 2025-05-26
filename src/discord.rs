@@ -18,7 +18,8 @@ use serde_json::json;
 ///
 /// [api-doc-ua]: https://discord.com/developers/docs/reference#user-agent
 const USER_AGENT: &str = concat!(
-    "Purdue Hackers Webring (",
+    env!("CARGO_PKG_NAME"),
+    " (",
     env!("CARGO_PKG_REPOSITORY"),
     ", ",
     env!("CARGO_PKG_VERSION"),
