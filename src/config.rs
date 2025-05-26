@@ -176,6 +176,15 @@ impl Config {
         let file_contents = tokio::fs::read_to_string(path).await?;
         Ok(toml::from_str(&file_contents)?)
     }
+
+    /// Returns `true` if any settings other than members have changed between the old and new
+    /// configurations.
+    pub fn diff_settings(old: &Config, new: &Config) -> bool {
+        old.webring != new.webring
+            || old.network != new.network
+            || old.logging != new.logging
+            || old.discord != new.discord
+    }
 }
 
 #[cfg(test)]
