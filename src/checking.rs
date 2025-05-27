@@ -133,7 +133,11 @@ async fn check_impl(
         return None;
     }
 
-    let response = match CLIENT.get(website.to_string()).send().await {
+    let response = match if check_level == CheckLevel::ForLinks {
+        CLIENT.get(website.to_string()).send().await
+    } else {
+        CLIENT.head(website.to_string()).send().await
+    } {
         Ok(response) => response,
         Err(err) => return Some(CheckFailure::Connection(err)),
     };
@@ -649,14 +653,17 @@ mod tests {
     #[ignore]
     async fn kians_site() {
         let base = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
-        assert!(
-            check(
-                &Uri::from_static("https://kasad.com"),
-                CheckLevel::ForLinks,
-                base,
-            )
-            .await
-            .is_none()
-        );
+
+        for level in [
+            CheckLevel::None,
+            CheckLevel::JustOnline,
+            CheckLevel::ForLinks,
+        ] {
+            assert!(
+                check(&Uri::from_static("https://kasad.com"), level, base)
+                    .await
+                    .is_none()
+            );
+        }
     }
 }
