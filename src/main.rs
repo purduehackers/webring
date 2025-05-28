@@ -10,7 +10,9 @@ use std::{
 use clap::Parser;
 use config::Config;
 use ftail::Ftail;
+use log::info;
 use routes::create_router;
+use sarlacc::num_objects_interned;
 use webring::Webring;
 
 mod checking;
@@ -78,6 +80,11 @@ async fn main() -> ExitCode {
         log::error!("Failed to watch configuration files for changes: {err}");
         log::warn!("The webring will not be reloaded when files change.");
     }
+
+    tokio::spawn(async {
+        info!("{} objects are interned", num_objects_interned());
+        tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+    });
 
     // Start server
     let router = create_router(&cfg.webring.static_dir)
