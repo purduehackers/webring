@@ -1,6 +1,6 @@
 [package]
 name = "ph-webring"
-version = "0.0.0"
+version = "0.0.0-pre1"
 description = "Purdue Hackers' webring server"
 repository = "https://github.com/purduehackers/webring"
 homepage = "https://ring.purduehackers.com"
