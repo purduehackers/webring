@@ -22,10 +22,12 @@
 
         src = ./.;
 
-        nativeBuildInputs = [ pkgconfig, pkgs.openssl.dev ];
-        cargoSha256 = "";
+        nativeBuildInputs = [ pkgs.pkg-config pkgs.openssl.dev ];
+        cargoHash = "sha256-oIm9GcOEgBvE8KahtNQwquX0Miir0uxr3Z5rMXKduTY=";
 
-        meta = with stdenv.lib; {
+        PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig"; 
+
+        meta = with pkgs.lib; {
           homepage = cargo.package.homepage;
           description = cargo.package.description;
           # TODO: Change
