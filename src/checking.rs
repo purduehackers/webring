@@ -9,20 +9,33 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-use tokio::io::AsyncReadExt;
 
-use axum::http::{Uri, uri::Scheme};
+use axum::{
+    body::Bytes,
+    http::{Uri, uri::Scheme},
+};
 use chrono::Utc;
-use futures::TryStreamExt;
+use futures::{Stream, TryStreamExt};
 use log::info;
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, Response, StatusCode};
 use sarlacc::Intern;
 use tokio::sync::RwLock;
-use tokio_util::io::StreamReader;
 
 use crate::webring::CheckLevel;
 
 static ONLINE_CHECK_TTL_MS: i64 = 1000;
+
+static CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .user_agent(format!(
+            "{}/{} (Purdue Hackers webring, +{})",
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+            env!("CARGO_PKG_REPOSITORY")
+        ))
+        .build()
+        .expect("Creating the HTTP client should not fail")
+});
 
 // (Last pinged, Was ping successful) — Used to check if the server is online
 static PING_INFO: RwLock<(i64, bool)> = RwLock::const_new((i64::MIN, false));
@@ -41,7 +54,6 @@ async fn mark_server_as_online() {
 }
 
 /// Check if the server is online by either getting a cached value (cached for `ONLINE_CHECK_TTL_MS`), or by pinging `8.8.8.8`.
-#[allow(dead_code)] // Used in code that may or may not be cfg'd out
 async fn is_online() -> bool {
     {
         // Has it been checked within the TTL?
@@ -61,18 +73,21 @@ async fn is_online() -> bool {
         return ping_info.1;
     }
 
-    // Ping something.
-    // Pings don't work in GitHub Actions runners, so if we're running in GH Actions, just pretend
-    // our ping succeeded, since we know we're online. We do this check only in non-release builds
-    // so we don't incur the runtime cost of checking the environment variable repeatedly. We don't
-    // just check at compile time because we may want to build binaries on GH Actions in the
-    // future.
-    let ping_successful = if cfg!(debug_assertions)
-        && std::env::var("GITHUB_ACTIONS").is_ok_and(|val| &val == "true")
+    // Head-request our repository to make sure we're online.
+    // Pings don't work in GitHub Actions runners or in Nix derivations, so if we're running tests, just pretend
+    // our ping succeeded. Note that we need to check the nix one at runtime because nix runs tests for everything using the release build with debug assertions off.
+    println!("{:#?}", std::env::vars_os());
+    let ping_successful = if (cfg!(debug_assertions)
+        && std::env::var("GITHUB_ACTIONS").is_ok_and(|val| val == "true"))
+        || std::env::var("NIX_BUILD_MARKER").is_ok_and(|val| val == "true")
     {
         true
     } else {
-        let result = surge_ping::ping("8.8.8.8".parse().unwrap(), &[0; 8]).await;
+        let result = CLIENT
+            .head(env!("CARGO_PKG_REPOSITORY"))
+            .send()
+            .await
+            .and_then(Response::error_for_status);
         result.is_ok()
     };
 
@@ -99,7 +114,6 @@ pub async fn check(
             // If the issue is not a connection issue, or if it is a connection issue and the
             // server is online, return it. Otherwise, it's a connection issue on our end, so log
             // and count the check as successful.
-            #[cfg(not(test))]
             if let CheckFailure::Connection(connection_error) = &failure {
                 if !is_online().await {
                     log::error!(
@@ -120,18 +134,6 @@ async fn check_impl(
     check_level: CheckLevel,
     base_address: Intern<Uri>,
 ) -> Option<CheckFailure> {
-    static CLIENT: LazyLock<Client> = LazyLock::new(|| {
-        Client::builder()
-            .user_agent(format!(
-                "{}/{} (Purdue Hackers webring, +{})",
-                env!("CARGO_PKG_NAME"),
-                env!("CARGO_PKG_VERSION"),
-                env!("CARGO_PKG_REPOSITORY")
-            ))
-            .build()
-            .expect("Creating the HTTP client should not fail")
-    });
-
     if check_level == CheckLevel::None {
         return None;
     }
@@ -144,7 +146,6 @@ async fn check_impl(
         Ok(response) => response,
         Err(err) => return Some(CheckFailure::Connection(err)),
     };
-    println!("{response:?}");
     mark_server_as_online().await;
     let successful_response = match response.error_for_status() {
         Ok(r) => r,
@@ -154,11 +155,8 @@ async fn check_impl(
     if check_level == CheckLevel::ForLinks {
         let stream = successful_response.bytes_stream();
 
-        (scan_for_links(
-            StreamReader::new(stream.map_err(std::io::Error::other)),
-            base_address,
-        )
-        .await)
+        scan_for_links(stream.map_err(std::io::Error::other), base_address)
+            .await
             .err()
     } else {
         None
@@ -307,7 +305,7 @@ impl Display for MissingLinks {
 }
 
 async fn scan_for_links(
-    mut webpage: impl tokio::io::AsyncBufRead + Unpin,
+    mut webpage: impl Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
     base_address: Intern<Uri>,
 ) -> Result<(), CheckFailure> {
     // This synchronization primitives should never actually be contented but it convinces Rust that the thing in question is `Send`. That way it can be kept across the `await`.
@@ -362,24 +360,16 @@ async fn scan_for_links(
         |_: &[u8]| {},
     );
 
-    let mut buf = Box::new([0_u8; 16384]);
     loop {
         if done.load(Ordering::Relaxed) {
             return Ok(());
         }
 
-        let bytes = webpage
-            .read_buf(&mut &mut buf[..])
-            .await
-            .map_err(CheckFailure::IOError)?;
-
-        if bytes == 0 {
+        let Some(bytes) = webpage.try_next().await.map_err(CheckFailure::IOError)? else {
             break;
-        }
+        };
 
-        rewriter
-            .write(&buf[0..bytes])
-            .map_err(CheckFailure::ParsingError)?;
+        rewriter.write(&bytes).map_err(CheckFailure::ParsingError)?;
     }
 
     drop(rewriter);
@@ -391,7 +381,8 @@ async fn scan_for_links(
 
 #[cfg(test)]
 mod tests {
-    use axum::{Router, http::Uri, response::Html, routing::get};
+    use axum::{Router, body::Bytes, http::Uri, response::Html, routing::get};
+    use futures::stream;
     use reqwest::StatusCode;
     use sarlacc::Intern;
 
@@ -404,7 +395,9 @@ mod tests {
     ) {
         assert_eq!(
             match scan_for_links(
-                file.replace("ADDRESS", base_address).as_bytes(),
+                stream::once(Box::pin(async {
+                    Ok(Bytes::from(file.replace("ADDRESS", base_address)))
+                })),
                 Intern::new(Uri::from_static(base_address))
             )
             .await

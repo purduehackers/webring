@@ -18,30 +18,28 @@ pedantic = { level = "warn", priority = -1 }
 match-on-vec-items = "allow"
 
 [dependencies]
-axum = "0.8.4"
-chrono = { version = "0.4.41", features = ["serde"] }
+axum = { version = "0.8.4", default-features = false, features = [ "http1", "http2", "tokio", "tracing", "query" ] }
+chrono = { version = "0.4.41", default-features = false, features = [ "serde", "now" ] }
 clap = { version = "4.5.38", features = ["derive"] }
 eyre = "0.6.12"
 ftail = "0.3.0"
-futures = "0.3.31"
-html-escape = "0.2.13"
-indexmap = { version = "2.9.0", features = ["serde"] }
+futures = { version = "0.3.31", default-features = false, features = [ "alloc" ] }
+html-escape = { version = "0.2.13", default-features = false }
+indexmap = { version = "2.9.0", default-features = false, features = ["serde"] }
 log = { version = "0.4.27", features = ["serde"] }
 lol_html = "2.4.0"
 notify = "8.0.0"
 papaya = { version = "0.2.1", features = ["serde"] }
-rand = "0.9.1"
+rand = { version = "0.9.1", default-features = false, features = [ "thread_rng" ]}
 reqwest = { version = "0.12.15", features = ["stream", "json"] }
 same-file = "1.0.6"
 sarlacc = "0.1.3"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
-surge-ping = "0.8.2"
-tera = "1.20.0"
-thiserror = "2.0.12"
+tera = { version = "1.20.0", default-features = false, features = [ "urlencode" ] }
+thiserror = { version = "2.0.12", default-features = false }
 tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread"] }
-tokio-util = { version = "0.7.15", features = ["io"] }
-toml = { version = "0.8.22", features = ["preserve_order"] }
+toml = { version = "0.8.22", default-feature = false, features = ["preserve_order", "parse"] }
 tower-http = { version = "0.6.4", features = ["cors", "fs", "catch-panic"] }
 
 [dev-dependencies]
