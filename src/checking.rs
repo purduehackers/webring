@@ -41,6 +41,7 @@ async fn mark_server_as_online() {
 }
 
 /// Check if the server is online by either getting a cached value (cached for `ONLINE_CHECK_TTL_MS`), or by pinging `8.8.8.8`.
+#[allow(dead_code)] // Used in code that may or may not be cfg'd out
 async fn is_online() -> bool {
     {
         // Has it been checked within the TTL?
