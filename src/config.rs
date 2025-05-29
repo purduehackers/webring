@@ -279,7 +279,11 @@ mod tests {
         let actual: Config = toml::from_str(config).unwrap();
         assert_eq!(
             LoggingTable {
-                verbosity: LevelFilter::Debug,
+                verbosity: if cfg!(debug_assertions) {
+                    LevelFilter::Debug
+                } else {
+                    LevelFilter::Info
+                },
                 log_file: None
             },
             actual.logging

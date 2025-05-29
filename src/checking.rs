@@ -14,7 +14,7 @@ use tokio::io::AsyncReadExt;
 use axum::http::{Uri, uri::Scheme};
 use chrono::Utc;
 use futures::TryStreamExt;
-use log::{error, info};
+use log::info;
 use reqwest::{Client, StatusCode};
 use sarlacc::Intern;
 use tokio::sync::RwLock;
@@ -84,30 +84,32 @@ async fn is_online() -> bool {
 
 /// Checks whether a given URL passes the given check level.
 ///
-/// Returns `Some` with the failure details if the site fails the check, or `None` if it passes (or
-/// if the check cannot be performed, e.g., due to the server being offline).
+/// Returns `Ok(Some(...))` with the failure details if the site fails the check, or `Ok(None)` if it passes.
+///
+/// Returns `Err` if the check cannot be performed (e.g., due to the server being offline).
 pub async fn check(
     website: &Uri,
     check_level: CheckLevel,
     base_address: Intern<Uri>,
-) -> Option<CheckFailure> {
+) -> Result<Option<CheckFailure>, ()> {
     match check_impl(website, check_level, base_address).await {
-        None => None,
+        None => Ok(None),
         Some(failure) => {
             // If the issue is not a connection issue, or if it is a connection issue and the
             // server is online, return it. Otherwise, it's a connection issue on our end, so log
             // and count the check as successful.
+            #[cfg(not(test))]
             if let CheckFailure::Connection(connection_error) = &failure {
                 if !is_online().await {
-                    error!(
+                    log::error!(
                         "Server-side connectivity issue detected: Could not reach {website}: {connection_error}"
                     );
-                    return None;
+                    return Err(());
                 }
             }
 
             info!("{website} failed a check: {failure}");
-            Some(failure)
+            Ok(Some(failure))
         }
     }
 }
@@ -141,6 +143,7 @@ async fn check_impl(
         Ok(response) => response,
         Err(err) => return Some(CheckFailure::Connection(err)),
     };
+    println!("{response:?}");
     mark_server_as_online().await;
     let successful_response = match response.error_for_status() {
         Ok(r) => r,
@@ -604,7 +607,7 @@ mod tests {
         #[expect(clippy::type_complexity)]
         let sites: Vec<(Uri, Vec<CheckLevel>, fn(CheckFailure) -> bool)> = vec![
             (
-                Uri::from_static("http://127.0.0.10:0/connection"),
+                Uri::from_static("http://127.0.0.10:60000/connection"),
                 vec![CheckLevel::None],
                 |failure| matches!(failure, CheckFailure::Connection(_)),
             ),
@@ -638,7 +641,7 @@ mod tests {
             ];
             for level in levels {
                 // FIXME: Collect CheckFailure and check type
-                let maybe_failure = super::check(&site, level, base).await;
+                let maybe_failure = super::check(&site, level, base).await.unwrap();
                 eprintln!("Checking {} at level {:?}", &site, level);
                 let was_successful = maybe_failure.is_none();
                 assert_eq!(expect_passing.contains(&level), was_successful);
@@ -662,6 +665,7 @@ mod tests {
             assert!(
                 check(&Uri::from_static("https://kasad.com"), level, base)
                     .await
+                    .unwrap()
                     .is_none()
             );
         }
