@@ -23,7 +23,9 @@
         src = ./.;
 
         nativeBuildInputs = [ pkgs.pkg-config pkgs.openssl.dev ];
-        cargoHash = "sha256-xTnOFR1gZCq4kFP/xSrkazzxv7loVm1JA8dLboMNEn8=";
+        cargoLock = {
+          lockFile = ./Cargo.lock;
+        };
 
         PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
         NIX_BUILD_MARKER = "true";
