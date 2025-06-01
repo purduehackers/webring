@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Build the webring at a particular commit hash and `cd` to the directory where it is located at. Note that you should `source` this script to get the cd to work
+# Build the webring at a particular commit hash and put it in the `/dev/shm/webring-ci` directory.
 # 
 # The working directory is expected to be the highest directory of the git repo (~/webring)
 
@@ -13,7 +13,7 @@ HASH=$1
 
 # Set up the testing directory in tmpfs
 
-CI_PATH=/dev/shm/"$HASH"-webring-ci
+CI_PATH=/dev/shm/webring-ci
 
 # Prevent other users from deleting/modifying our directory
 mkdir $CI_PATH --mode=700
@@ -29,5 +29,5 @@ git fetch --all || exit 1
 git --work-tree $CI_PATH checkout $HASH -- . || exit 1
 cd $CI_PATH
 
-pwd
-./ci/vulcan/build.sh || exit 1
+# Build the flake
+nix build || exit 1
