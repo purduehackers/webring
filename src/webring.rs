@@ -174,6 +174,12 @@ impl Webring {
                 match old_members.get(name) {
                     Some(old_member) => {
                         new_member.check_successful = Arc::clone(&old_member.check_successful);
+                        if old_member.check_level != new_member.check_level {
+                            tasks.push(new_member.check_and_store_and_optionally_notify(
+                                self.base_address,
+                                self.notifier.as_ref().map(Arc::clone),
+                            ));
+                        }
                     }
                     None => {
                         tasks.push(new_member.check_and_store_and_optionally_notify(
@@ -579,7 +585,11 @@ mod tests {
         time::Duration,
     };
 
-    use axum::http::{Uri, uri::Authority};
+    use axum::{
+        Router,
+        http::{Uri, uri::Authority},
+        routing::get,
+    };
     use chrono::Utc;
     use indexmap::IndexMap;
     use indoc::indoc;
@@ -649,6 +659,14 @@ mod tests {
     }
 
     fn make_config() -> Config {
+        // Start a web server so we can make sure that it does checks right
+        let server_addr = ("127.0.0.1", 32751);
+        tokio::spawn(async move {
+            let listener = tokio::net::TcpListener::bind(&server_addr).await.unwrap();
+            let router: Router<()> = Router::new().route("/up", get(async || "Hi there!"));
+            axum::serve(listener, router).await.unwrap();
+        });
+
         let static_dir = TempDir::new().unwrap();
         toml::from_str(&format!(
             indoc! { r#"
@@ -662,7 +680,7 @@ mod tests {
                 [members]
                 henry = {{ url = "hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }}
                 kian = {{ url = "kasad.com", discord-id = 456, check-level = "none" }}
-                cynthia = {{ url = "https://clementine.viridian.page", discord-id = 789, check-level = "none" }}
+                cynthia = {{ url = "https://localhost:32751", discord-id = 789, check-level = "online" }}
                 "???" = {{ url = "ws://refuse-the-r.ing", check-level = "none" }}
             "# },
             static_dir.path().display()
@@ -704,13 +722,13 @@ mod tests {
                 },
             );
             expected.insert(
-                Intern::new("clementine.viridian.page".parse().unwrap()),
+                Intern::new("localhost:32751".parse().unwrap()),
                 Member {
                     name: "cynthia".to_owned(),
-                    website: Intern::new(Uri::from_static("https://clementine.viridian.page")),
-                    authority: Intern::new("clementine.viridian.page".parse().unwrap()),
+                    website: Intern::new(Uri::from_static("https://localhost:32751")),
+                    authority: Intern::new("localhost:32751".parse().unwrap()),
                     discord_id: Some("789".parse().unwrap()),
-                    check_level: CheckLevel::None,
+                    check_level: CheckLevel::JustOnline,
                     check_successful: Arc::new(AtomicBool::new(true)),
                 },
             );
@@ -765,7 +783,7 @@ mod tests {
                 Authority::from_static("kasad.com:3000"),
             )),
         );
-        webring.assert_next("https://kasad.com", Ok("https://clementine.viridian.page"));
+        webring.assert_next("https://kasad.com", Ok("https://localhost:32751"));
         webring.assert_prev(
             "/relative/uri",
             Err(TraverseWebringError::NoAuthority(Uri::from_static(
@@ -773,6 +791,7 @@ mod tests {
             ))),
         );
 
+        // Henry is failing a check??
         webring.members.write().unwrap()[0]
             .check_successful
             .store(false, Ordering::Relaxed);
@@ -804,7 +823,7 @@ mod tests {
         }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
-        expected_random.insert(Uri::from_static("https://clementine.viridian.page"));
+        expected_random.insert(Uri::from_static("https://localhost:32751"));
         assert_eq!(found_in_random, expected_random);
 
         // Test random without a specified origin
@@ -819,7 +838,7 @@ mod tests {
         }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
-        expected_random.insert(Uri::from_static("https://clementine.viridian.page"));
+        expected_random.insert(Uri::from_static("https://localhost:32751"));
         expected_random.insert(Uri::from_static("ws://refuse-the-r.ing"));
         assert_eq!(found_in_random, expected_random);
 
@@ -836,14 +855,14 @@ mod tests {
         }
         let mut expected_random = HashSet::new();
         expected_random.insert(Uri::from_static("kasad.com"));
-        expected_random.insert(Uri::from_static("https://clementine.viridian.page"));
+        expected_random.insert(Uri::from_static("https://localhost:32751"));
         expected_random.insert(Uri::from_static("ws://refuse-the-r.ing"));
         assert_eq!(found_in_random, expected_random);
 
         assert_eq!(num_objects_interned(), original_interned_objects);
 
         let new_members: IndexMap<String, MemberSpec> = toml::from_str(indoc! { r#"
-            cynthia = { url = "https://clementine.viridian.page", discord-id = 789, check-level = "none" }
+            cynthia = { url = "https://localhost:32751", discord-id = 789, check-level = "links" }
             henry = { url = "hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }
             "???" = { url = "http://refuse-the-r.ing", discord-id = 293847, check-level = "none" }
             arhan = { url = "arhan.sh", check-level = "none" }
@@ -853,23 +872,43 @@ mod tests {
 
         webring.update_members_and_check(&new_members).await;
 
+        // Make sure that it found that Cynthia's links aren't there
+        assert_eq!(
+            webring.members.read().unwrap()[0]
+                .check_successful
+                .load(Ordering::Relaxed),
+            false
+        );
+
+        // Make sure that it didn't re-check Henry because he didn't change
+        assert_eq!(
+            webring.members.read().unwrap()[1]
+                .check_successful
+                .load(Ordering::Relaxed),
+            false
+        );
+
+        webring.members.read().unwrap()[0]
+            .check_successful
+            .store(true, Ordering::Relaxed);
+
         let original_interned_objects = num_objects_interned();
 
-        webring.assert_next("clementine.viridian.page", Ok("http://refuse-the-r.ing"));
+        webring.assert_next("https://localhost:32751", Ok("http://refuse-the-r.ing"));
         webring.assert_next("hrovnyak.gitlab.io", Ok("http://refuse-the-r.ing"));
         webring.assert_next("refuse-the-r.ing", Ok("arhan.sh"));
         webring.assert_next("arhan.sh", Ok("kasad.com"));
-        webring.assert_next("kasad.com", Ok("https://clementine.viridian.page"));
+        webring.assert_next("kasad.com", Ok("https://localhost:32751"));
 
         for i in 0..5 {
-            webring.members.write().unwrap()[i]
+            webring.members.read().unwrap()[i]
                 .check_successful
                 .store(false, Ordering::Relaxed);
         }
 
         webring.assert_next("kasad.com", Err(TraverseWebringError::AllMembersFailing));
         webring.assert_prev(
-            "clementine.viridian.page",
+            "https://localhost:32751",
             Err(TraverseWebringError::AllMembersFailing),
         );
         assert_eq!(
@@ -877,7 +916,7 @@ mod tests {
             Err(TraverseWebringError::AllMembersFailing)
         );
         webring.assert_prev(
-            "clementine.viridian.page",
+            "https://localhost:32751",
             Err(TraverseWebringError::AllMembersFailing),
         );
 
