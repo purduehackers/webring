@@ -320,9 +320,13 @@ async fn scan_for_links(
     let mut rewriter = HtmlRewriter::new(
         Settings {
             element_content_handlers: vec![
-                element!("a[href]", |el| {
+                element!("a[href], area[href]", |el| {
                     // Unwrap is OK since we selected for href
-                    let Ok(href) = el.get_attribute("href").unwrap().parse::<Uri>() else {
+                    let Ok(href) =
+                        html_escape::decode_html_entities(&el.get_attribute("href").unwrap())
+                            .trim()
+                            .parse::<Uri>()
+                    else {
                         return Ok(());
                     };
 
@@ -337,11 +341,13 @@ async fn scan_for_links(
                 }),
                 element!("*[data-phwebring]", |el| {
                     // Unwrap is OK since we selected for data-phwebring
-                    let value = el.get_attribute("data-phwebring").unwrap();
+                    let attr = el.get_attribute("data-phwebring").unwrap();
+                    let decoded = html_escape::decode_html_entities(&attr);
+                    let value = decoded.trim();
 
                     let mut missing_links = missing_links.lock().unwrap();
 
-                    match &*value {
+                    match value {
                         "prev" | "previous" => missing_links.prev = false,
                         "home" => missing_links.home = false,
                         "next" => missing_links.next = false,
@@ -420,7 +426,7 @@ mod tests {
         assert_links_gives(
             "https://ring.purduehackers.com",
             "<body>
-                <a href=\"ADDRESS/\"></a>
+                <a href=\"https:&#x2f;&#x2f;ring.purduehackers.com/\"></a>
                 <a href=\"ADDRESS/prev\"></a>
                 <a href=\"ADDRESS/next\"></a>
             </body>",
@@ -434,7 +440,7 @@ mod tests {
         assert_links_gives(
             "http://purduehackers.com/",
             "<div>
-                <a href=\"ADDRESS\"></a>
+                <area href=\"ADDRESS\"></area>
             </div>",
             (false, true, true),
         )
@@ -461,7 +467,7 @@ mod tests {
                 <img/>
             </carousel>
             <thingy>
-                <a href=\"ADDRESSprevious?query=huh\"></a>
+                <a href=\" \n     \t  ADDRESSprevious?query=huh   \t\n  \"></a>
             </thingy>",
             (true, false, true),
         )
@@ -473,7 +479,7 @@ mod tests {
         assert_links_gives(
             "https://uz/",
             "<body>
-                <a href=\"ADDRESSnext/\"></a>
+                <area href=\"ADDRESSnext/\"></area>
             </body>",
             (true, true, false),
         )
@@ -522,7 +528,7 @@ mod tests {
         assert_links_gives(
             "https://ring.purduehackers.com",
             "<div>
-                <b data-phwebring=\"home\"></b>
+                <b data-phwebring=\"\n \t    home   \t     \n  \"></b>
             </div>",
             (false, true, true),
         )
@@ -656,12 +662,10 @@ mod tests {
             CheckLevel::JustOnline,
             CheckLevel::ForLinks,
         ] {
-            assert!(
-                check(&Uri::from_static("https://kasad.com"), level, base)
-                    .await
-                    .unwrap()
-                    .is_none()
-            );
+            let failure = check(&Uri::from_static("https://kasad.com"), level, base)
+                .await
+                .unwrap();
+            assert!(failure.is_none(), "{}", failure.unwrap());
         }
     }
 }
