@@ -11,7 +11,7 @@ then
 fi
 
 case "$SSH_ORIGINAL_COMMAND" in
-    build | build-for-ci | cleanup | test )
+    build-for-ci | cleanup | test | deploy )
         exec ./$SSH_ORIGINAL_COMMAND
         ;;
     *)
