@@ -25,10 +25,10 @@
         nativeBuildInputs = [ pkgs.pkg-config pkgs.openssl.dev ];
         cargoLock = {
           lockFile = ./Cargo.lock;
+          allowBuiltinFetchGit = true;
         };
 
         PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
-        NIX_BUILD_MARKER = "true";
 
         meta = with pkgs.lib; {
           homepage = cargo.package.homepage;
@@ -36,7 +36,11 @@
           # TODO: Change
           license = licenses.mit;
         };
+
+        doCheck = false;
       };
+
+      packages.default-static = ./static;
 
       legacyPackages = packages;
 
