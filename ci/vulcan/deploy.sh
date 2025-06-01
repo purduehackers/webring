@@ -14,4 +14,4 @@ git fetch --all || exit 1
 git checkout $HASH || exit 1
 
 # Reload home manager — Automatically rebuilds the webring and restarts the systemd unit.
-home-manager switch
+home-manager switch || exit 1

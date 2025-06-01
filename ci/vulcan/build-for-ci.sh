@@ -18,11 +18,6 @@ CI_PATH=/dev/shm/webring-ci
 # Prevent other users from deleting/modifying our directory
 mkdir $CI_PATH --mode=700
 
-# Defer cleanup until after this script has finished
-# SCRIPT_PID=$$
-# bash -e "wait $SCRIPT_PID; rm -r $CI_PATH" &
-# disown
-
 # Checkout the commit into the testing directory
 # Use `--work-tree` to copy the code into the testing directory instead of the deployment directory. This doesn't copy `.git`.
 git fetch --all || exit 1
