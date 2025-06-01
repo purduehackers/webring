@@ -15,14 +15,17 @@ HASH=$1
 
 CI_PATH=/dev/shm/webring-ci
 
-# Prevent other users from deleting/modifying our directory
-mkdir $CI_PATH --mode=700
+# Create the directory if it's not already created
+if ! [ -d $CI_PATH ]; then
+  # Prevent other users from deleting/modifying our directory
+  mkdir $CI_PATH --mode=700 || exit 1
+fi
 
 # Checkout the commit into the testing directory
 # Use `--work-tree` to copy the code into the testing directory instead of the deployment directory. This doesn't copy `.git`.
 git fetch --all || exit 1
 git --work-tree $CI_PATH checkout $HASH -- . || exit 1
-cd $CI_PATH
+cd $CI_PATH || exit 1
 
 # Build the flake
 nix build || exit 1
