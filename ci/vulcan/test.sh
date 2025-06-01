@@ -6,6 +6,7 @@
 timeout -k 10s -s 9 10s bwrap --bind /dev/shm/webring-ci /webring --ro-bind /nix/store /nix/store --ro-bind /etc /etc --tmpfs /tmp --unshare-all --share-net --new-session --chdir /webring --uid 256 --gid 512 --die-with-parent ./result/bin/ph-webring
 STATUS=$?
 
+# The timeout command gives a 137 status when it times out the program, and we expect it to time out the server.
 if [ $STATUS -ne 137 ]; then
   exit 0
 fi
