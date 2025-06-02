@@ -607,7 +607,7 @@ mod tests {
         #[expect(clippy::type_complexity)]
         let sites: Vec<(Uri, Vec<CheckLevel>, fn(CheckFailure) -> bool)> = vec![
             (
-                Uri::from_static("http://127.0.0.10:60000/connection"),
+                Uri::from_static("http://127.0.0.1:60000/connection"),
                 vec![CheckLevel::None],
                 |failure| matches!(failure, CheckFailure::Connection(_)),
             ),
