@@ -74,49 +74,34 @@
 
       defaultPackage = packages.phwebring;
 
-      homeConfigurations."ring" = let
-        home-manager = {
-          url = "github:nix-community/home-manager";
-          inputs.nixpkgs.follows = "nixpkgs";
-        };
-      in home-manager.lib.homeManagerConfiguration {
+      packages.homeConfigurations."ring" = home-manager.lib.homeManagerConfiguration {
         inherit pkgs;
 
-        home.username = "ring";
-        home.homeDirectory = "/home/ring";
-        home.stateVersion = "24.11";
+        modules = [ {
+          home.username = "ring";
+          home.homeDirectory = "/home/ring";
+          home.stateVersion = "24.11";
 
-        home.packages = [ packages.phwebring ];
+          home.packages = [ packages.phwebring ];
 
-        home.file."webring-data/static".source = ./static;
+          home.file."webring-data/static".source = ./static;
 
-        # This will automatically get restarted when rebuilding the home directory
-        systemd.user.services.phwebring = {
-          Unit.Description = "Purdue Hackers webring";
+          # This will automatically get restarted when rebuilding the home directory
+          systemd.user.services.phwebring = {
+            Unit.Description = "Purdue Hackers webring";
 
-          Service = {
-            ExecStart = "${pkgs.bubblewrap}/bin/bwrap \
-              --bind /home/ring/webring-data /webring \
-              --ro-bind /nix/store /nix/store \
-              --ro-bind /etc /etc \
-              --tmpfs /tmp \
-              --unshare-all \
-              --share-net \
-              --new-session \
-              --chdir /webring \
-              --uid 256 \
-              --gid 512 \
-              --die-with-parent \
-              ${packages.phwebring}/bin/ph-webring";
+            Service = {
+              ExecStart = "${pkgs.bubblewrap}/bin/bwrap --bind /home/ring/webring-data /webring --ro-bind /nix/store /nix/store --ro-bind /etc /etc --tmpfs /tmp --unshare-all --share-net --new-session --chdir /webring --uid 256 --gid 512 --die-with-parent ${packages.phwebring}/bin/ph-webring";
 
-            Restart = "on-failure";
-            Type = "exec";
+              Restart = "on-failure";
+              Type = "exec";
+            };
+
+            Install = {
+              WantedBy = [ "default.target" ];
+            };
           };
-
-          Install = {
-            WantedBy = [ "default.target" ];
-          };
-        };
+        } ];
       };
     }
   );
