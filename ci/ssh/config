@@ -1,0 +1,5 @@
+Host vulcan
+    Hostname vulcan.moe
+    Port 4225
+    User ring
+    IdentityFile ~/.ssh/id_ed25519

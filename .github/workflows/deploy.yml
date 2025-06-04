@@ -1,0 +1,30 @@
+name: Deploy
+run-name: Deploy ${{ github.ref_name }} to production by @${{ github.actor }}
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: Production
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: ci/ssh
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          rsync -vr ci/ssh/ ~/.ssh
+          echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+          chmod -R u=rwX,g=,o= ~/.ssh
+
+      - name: Trigger deployment
+        run: ssh vulcan deploy "${{ github.sha }}"

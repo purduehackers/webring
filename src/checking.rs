@@ -74,12 +74,10 @@ async fn is_online() -> bool {
     }
 
     // Head-request our repository to make sure we're online.
-    // Pings don't work in GitHub Actions runners or in Nix derivations, so if we're running tests, just pretend
-    // our ping succeeded. Note that we need to check the nix one at runtime because nix runs tests for everything using the release build with debug assertions off.
-    println!("{:#?}", std::env::vars_os());
-    let ping_successful = if (cfg!(debug_assertions)
-        && std::env::var("GITHUB_ACTIONS").is_ok_and(|val| val == "true"))
-        || std::env::var("NIX_BUILD_MARKER").is_ok_and(|val| val == "true")
+    // Pings don't work in GitHub Actions runners, so if we're running tests, just pretend
+    // our ping succeeded.
+    let ping_successful = if cfg!(debug_assertions)
+        && std::env::var("GITHUB_ACTIONS").is_ok_and(|val| val == "true")
     {
         true
     } else {
