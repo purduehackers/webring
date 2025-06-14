@@ -2,14 +2,19 @@ name: Deploy
 run-name: Deploy ${{ github.ref_name }} to production by @${{ github.actor }}
 
 on:
-  push:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
     branches:
       - master
-  workflow_dispatch:
 
 jobs:
   deploy:
     name: Deploy
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: Production
     steps:
@@ -26,5 +31,8 @@ jobs:
           echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
           chmod -R u=rwX,g=,o= ~/.ssh
 
-      - name: Trigger deployment
-        run: ssh vulcan deploy "${{ github.sha }}"
+      - name: Build on Vulcan
+        run: ssh vulcan nix build "github:${{ github.repository }}/${{ github.sha }}"
+
+      - name: Deploy on Vulcan
+        run: ssh vulcan home-manager switch --flake "github:${{ github.repository }}/${{ github.sha }}"
