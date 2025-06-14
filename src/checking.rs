@@ -198,7 +198,7 @@ impl CheckFailure {
             CheckFailure::MissingLinks(missing_links) => missing_links.to_string(),
             CheckFailure::LinksWithTarget(links) => {
                 format!(
-                    "Please remove the `target=` attribute from the following links on your site\n{}",
+                    "Please remove the `target=` attribute from the following links on your site:\n{}",
                     links.to_message()
                 )
             }
@@ -285,7 +285,7 @@ impl Display for SiteLinks {
         if self.next {
             missing_link_names.push("next site");
         }
-        write!(f, "Missing links: {}", missing_link_names.join(", "))
+        missing_link_names.join(", ").fmt(f)
     }
 }
 
@@ -457,10 +457,13 @@ async fn scan_for_links(
 mod tests {
     use axum::{Router, body::Bytes, http::Uri, response::Html, routing::get};
     use futures::stream;
+    use indoc::indoc;
     use reqwest::StatusCode;
     use sarlacc::Intern;
 
     use super::{CheckFailure, CheckLevel, MissingLinks, SiteLinks, check, scan_for_links};
+
+    use pretty_assertions::assert_eq;
 
     async fn assert_links_gives(
         base_address: &'static str,
@@ -767,7 +770,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires live site and may be slow"]
     async fn kians_site() {
         let base = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
 
@@ -781,5 +784,57 @@ mod tests {
                 .unwrap();
             assert!(failure.is_none(), "{}", failure.unwrap());
         }
+    }
+
+    #[test]
+    fn test_render_missing_links_message() {
+        let missing_links = CheckFailure::MissingLinks(MissingLinks(SiteLinks {
+            base_address: Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            home: true,
+            next: false,
+            prev: true,
+        }));
+        let expected = indoc! { r#"
+            Your site is missing the following links:
+            - <https://ring.purduehackers.com>
+            - <https://ring.purduehackers.com/prev>
+
+            What to do:
+            - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
+            - If you don't use anchor tags for the links, add the attribute `data-phwebring="prev"|"home"|"next"` to the link elements.
+            - If you think this alert is in error, send a message in #webring.
+        "# };
+        let actual = missing_links.to_message();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_render_links_with_target_message() {
+        let links = CheckFailure::LinksWithTarget(SiteLinks {
+            base_address: Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            home: true,
+            next: false,
+            prev: true,
+        });
+        let expected = indoc! { "
+            Please remove the `target=` attribute from the following links on your site:
+            - <https://ring.purduehackers.com>
+            - <https://ring.purduehackers.com/prev>
+        " };
+        let actual = links.to_message();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_links_with_target_display() {
+        let links = CheckFailure::LinksWithTarget(SiteLinks {
+            base_address: Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            home: true,
+            next: false,
+            prev: true,
+        });
+        let expected = "Links have target attribute: ring homepage, previous site";
+        let actual = links.to_string();
+        assert_eq!(expected, actual);
     }
 }
