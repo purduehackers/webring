@@ -9,16 +9,8 @@ run-name: |
   }}
 
 on:
+  workflow_dispatch:
   push:
-    paths:
-      - "src/**"
-      - "tests/**"
-      - "examples/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - "build.rs"
-      - ".github/workflows/ci.yml"
   pull_request:
     branches:
       - master
