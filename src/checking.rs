@@ -170,6 +170,8 @@ pub enum CheckFailure {
     ResponseStatus(StatusCode),
     /// Site returned a successful response but is missing the expected links
     MissingLinks(MissingLinks),
+    /// Site has all links, but at least one has a `target` attribute
+    LinksWithTarget(SiteLinks),
     /// IO error
     IOError(std::io::Error),
     /// HTML parsing error
@@ -194,6 +196,12 @@ impl CheckFailure {
                 msg
             }
             CheckFailure::MissingLinks(missing_links) => missing_links.to_string(),
+            CheckFailure::LinksWithTarget(links) => {
+                format!(
+                    "Please remove the `target=` attribute from the following links on your site:\n{}",
+                    links.to_message()
+                )
+            }
             CheckFailure::IOError(err) => {
                 format!("There was an IO error while reading the body of your site: {err}")
             }
@@ -214,17 +222,10 @@ impl Display for CheckFailure {
                 write!(f, "Site returned {}", status_to_string(*status_code))
             }
             CheckFailure::MissingLinks(missing_links) => {
-                let mut missing_link_names = Vec::with_capacity(3);
-                if missing_links.home {
-                    missing_link_names.push("ring homepage");
-                }
-                if missing_links.prev {
-                    missing_link_names.push("previous site");
-                }
-                if missing_links.next {
-                    missing_link_names.push("next site");
-                }
-                write!(f, "Missing links: {}", missing_link_names.join(", "))
+                write!(f, "Missing links: {}", missing_links.0)
+            }
+            CheckFailure::LinksWithTarget(links) => {
+                write!(f, "Links have target attribute: {links}")
             }
             CheckFailure::IOError(e) => e.fmt(f),
             CheckFailure::ParsingError(e) => e.fmt(f),
@@ -241,57 +242,105 @@ fn status_to_string(status: StatusCode) -> String {
     msg
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct MissingLinks {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteLinks {
     base_address: Intern<Uri>,
     pub home: bool,
     pub next: bool,
     pub prev: bool,
 }
 
+impl SiteLinks {
+    pub fn to_message(&self) -> String {
+        let mut msg = String::new();
+        let address_string = self.base_address.to_string();
+        let address = address_string.strip_suffix('/').unwrap_or(&address_string);
+        if self.home {
+            writeln!(&mut msg, "- <{address}>").unwrap();
+        }
+        if self.next {
+            writeln!(&mut msg, "- <{address}/next>").unwrap();
+        }
+        if self.prev {
+            writeln!(&mut msg, "- <{address}/prev>").unwrap();
+        }
+        msg
+    }
+
+    /// Returns true if any of the links are set to true
+    pub fn has_any(&self) -> bool {
+        self.home || self.next || self.prev
+    }
+}
+
+impl Display for SiteLinks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut missing_link_names = Vec::with_capacity(3);
+        if self.home {
+            missing_link_names.push("ring homepage");
+        }
+        if self.prev {
+            missing_link_names.push("previous site");
+        }
+        if self.next {
+            missing_link_names.push("next site");
+        }
+        missing_link_names.join(", ").fmt(f)
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum SiteLinkType {
+    Homepage,
+    Next,
+    Previous,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingLinks(pub SiteLinks);
+
 impl MissingLinks {
     /// Should be called for every link on the page. If the inputted link matches any of the expected links, mark it as found.
-    fn found_link(&mut self, link: &Uri) {
-        let authority = self.base_address.authority().unwrap();
+    /// Returns the type of the link if it was one of the expected links.
+    fn found_link(&mut self, link: &Uri) -> Option<SiteLinkType> {
+        let authority = self.0.base_address.authority().unwrap();
 
         if ![None, Some(&Scheme::HTTPS), Some(&Scheme::HTTP)].contains(&link.scheme()) {
-            return;
+            return None;
         }
 
         if link.authority() != Some(authority) {
-            return;
+            return None;
         }
 
         let path = link.path().trim_matches('/');
 
         match path {
-            "" => self.home = false,
-            "next" => self.next = false,
-            "prev" | "previous" => self.prev = false,
-            _ => {}
+            "" => {
+                self.0.home = false;
+                Some(SiteLinkType::Homepage)
+            }
+            "next" => {
+                self.0.next = false;
+                Some(SiteLinkType::Next)
+            }
+            "prev" | "previous" => {
+                self.0.prev = false;
+                Some(SiteLinkType::Previous)
+            }
+            _ => None,
         }
     }
 
     fn all_found(&self) -> bool {
-        !self.home && !self.next && !self.prev
+        !self.0.home && !self.0.next && !self.0.prev
     }
 }
 
 impl Display for MissingLinks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let address_string = self.base_address.to_string();
-        let address = address_string.strip_suffix('/').unwrap_or(&address_string);
         writeln!(f, "Your site is missing the following links:")?;
-        if self.home {
-            writeln!(f, "- <{address}>")?;
-        }
-        if self.next {
-            writeln!(f, "- <{address}/next>")?;
-        }
-        if self.prev {
-            writeln!(f, "- <{address}/prev>")?;
-        }
-
+        write!(f, "{}", self.0.to_message())?;
         writeln!(
             f,
             "\nWhat to do:
@@ -307,11 +356,17 @@ async fn scan_for_links(
     base_address: Intern<Uri>,
 ) -> Result<(), CheckFailure> {
     // This synchronization primitives should never actually be contented but it convinces Rust that the thing in question is `Send`. That way it can be kept across the `await`.
-    let missing_links = Mutex::new(MissingLinks {
+    let missing_links = Mutex::new(MissingLinks(SiteLinks {
         base_address,
         home: true,
         next: true,
         prev: true,
+    }));
+    let links_with_target = Mutex::new(SiteLinks {
+        base_address,
+        home: false,
+        next: false,
+        prev: false,
     });
     let done = AtomicBool::new(false);
 
@@ -329,7 +384,16 @@ async fn scan_for_links(
                     };
 
                     let mut missing_links = missing_links.lock().unwrap();
-                    missing_links.found_link(&href);
+                    if let Some(kind) = missing_links.found_link(&href) {
+                        if el.get_attribute("target").is_some() {
+                            let mut links_with_target = links_with_target.lock().unwrap();
+                            match kind {
+                                SiteLinkType::Homepage => links_with_target.home = true,
+                                SiteLinkType::Next => links_with_target.next = true,
+                                SiteLinkType::Previous => links_with_target.prev = true,
+                            }
+                        }
+                    }
 
                     if missing_links.all_found() {
                         done.store(true, Ordering::Relaxed);
@@ -346,9 +410,9 @@ async fn scan_for_links(
                     let mut missing_links = missing_links.lock().unwrap();
 
                     match value {
-                        "prev" | "previous" => missing_links.prev = false,
-                        "home" => missing_links.home = false,
-                        "next" => missing_links.next = false,
+                        "prev" | "previous" => missing_links.0.prev = false,
+                        "home" => missing_links.0.home = false,
+                        "next" => missing_links.0.next = false,
                         _ => {}
                     }
 
@@ -366,7 +430,7 @@ async fn scan_for_links(
 
     loop {
         if done.load(Ordering::Relaxed) {
-            return Ok(());
+            break;
         }
 
         let Some(bytes) = webpage.try_next().await.map_err(CheckFailure::IOError)? else {
@@ -378,19 +442,28 @@ async fn scan_for_links(
 
     drop(rewriter);
 
-    Err(CheckFailure::MissingLinks(
-        missing_links.into_inner().unwrap(),
-    ))
+    let missing_links = missing_links.into_inner().unwrap();
+    if missing_links.0.has_any() {
+        return Err(CheckFailure::MissingLinks(missing_links));
+    }
+    let links_with_target = links_with_target.into_inner().unwrap();
+    if links_with_target.has_any() {
+        return Err(CheckFailure::LinksWithTarget(links_with_target));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use axum::{Router, body::Bytes, http::Uri, response::Html, routing::get};
     use futures::stream;
+    use indoc::indoc;
     use reqwest::StatusCode;
     use sarlacc::Intern;
 
-    use super::{CheckFailure, CheckLevel, MissingLinks, check, scan_for_links};
+    use super::{CheckFailure, CheckLevel, MissingLinks, SiteLinks, check, scan_for_links};
+
+    use pretty_assertions::assert_eq;
 
     async fn assert_links_gives(
         base_address: &'static str,
@@ -410,12 +483,12 @@ mod tests {
                 Err(CheckFailure::MissingLinks(missing)) => Some(missing),
                 e => panic!("{e:?}"),
             },
-            res.into().map(|(home, prev, next)| MissingLinks {
+            res.into().map(|(home, prev, next)| MissingLinks(SiteLinks {
                 home,
                 next,
                 prev,
                 base_address: Intern::new(Uri::from_static(base_address))
-            })
+            }))
         );
     }
 
@@ -570,6 +643,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn detect_target_attribute() {
+        let base_address = "https://ring.purduehackers.com";
+        let file = r#"<body>
+            <a href="ADDRESS" target="_blank"></a>
+            <a href="ADDRESS/prev"></a>
+            <a target="_blank" href="ADDRESS/next"></a>
+        </body>"#;
+        let result = scan_for_links(
+            stream::once(Box::pin(async {
+                Ok(Bytes::from(file.replace("ADDRESS", base_address)))
+            })),
+            Intern::new(Uri::from_static(base_address)),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(CheckFailure::LinksWithTarget(SiteLinks {
+                base_address: _,
+                home: true,
+                next: true,
+                prev: false
+            }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn missing_supercedes_target() {
+        let base_address = "https://ring.purduehackers.com";
+        let file = r#"<body>
+            <a href="ADDRESS" target="_blank"></a>
+            <a target="_blank" href="ADDRESS/next"></a>
+        </body>"#;
+        let result = scan_for_links(
+            stream::once(Box::pin(async {
+                Ok(Bytes::from(file.replace("ADDRESS", base_address)))
+            })),
+            Intern::new(Uri::from_static(base_address)),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(CheckFailure::MissingLinks(MissingLinks(_)))
+        ));
+    }
+
+    #[tokio::test]
     async fn check_failure_types() {
         // Start a web server so we can do each kinds of checks
         let server_addr = ("127.0.0.1", 32750);
@@ -651,7 +770,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires live site and may be slow"]
     async fn kians_site() {
         let base = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
 
@@ -665,5 +784,57 @@ mod tests {
                 .unwrap();
             assert!(failure.is_none(), "{}", failure.unwrap());
         }
+    }
+
+    #[test]
+    fn test_render_missing_links_message() {
+        let missing_links = CheckFailure::MissingLinks(MissingLinks(SiteLinks {
+            base_address: Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            home: true,
+            next: false,
+            prev: true,
+        }));
+        let expected = indoc! { r#"
+            Your site is missing the following links:
+            - <https://ring.purduehackers.com>
+            - <https://ring.purduehackers.com/prev>
+
+            What to do:
+            - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
+            - If you don't use anchor tags for the links, add the attribute `data-phwebring="prev"|"home"|"next"` to the link elements.
+            - If you think this alert is in error, send a message in #webring.
+        "# };
+        let actual = missing_links.to_message();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_render_links_with_target_message() {
+        let links = CheckFailure::LinksWithTarget(SiteLinks {
+            base_address: Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            home: true,
+            next: false,
+            prev: true,
+        });
+        let expected = indoc! { "
+            Please remove the `target=` attribute from the following links on your site:
+            - <https://ring.purduehackers.com>
+            - <https://ring.purduehackers.com/prev>
+        " };
+        let actual = links.to_message();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_links_with_target_display() {
+        let links = CheckFailure::LinksWithTarget(SiteLinks {
+            base_address: Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            home: true,
+            next: false,
+            prev: true,
+        });
+        let expected = "Links have target attribute: ring homepage, previous site";
+        let actual = links.to_string();
+        assert_eq!(expected, actual);
     }
 }
