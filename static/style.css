@@ -1,81 +1,141 @@
-#bgcover {
-    z-index: -1000;
-    position: fixed;
-    top: 0;
-    left: 0;
-    height: 100dvh;
-    width: 100vw;
-    background-image: url("/static/PurdueHackers.svg");
-    background-size: 70px;
-    opacity: 40%;
+.wide {
+    display: none;
 }
-@media not (prefers-reduced-motion) {
-    #bgcover {
-        animation: lv 150000s linear infinite;
-    }
-}
+
 body {
-    position: relative;
-    margin: 0 auto;
-    max-width: 650px;
-    line-height: 1.6;
-    font-size: 18px;
-    color: #383838;
-    padding: 60px 24px 200px 24px;
-    font-family: "Verdana", "Helvetica", sans-serif;
-    min-height: 100dvh;
+    font-family: -apple-system, BlinkMacSystemFont, avenir next,
+        avenir, segoe ui, helvetica neue, Cantarell, Ubuntu, roboto,
+        noto, helvetica, arial, sans-serif;
+    margin: 0;
+    padding: 32px 16px;
+    color: #262426; /* From logo color */
+    width: fit-content;
+    min-width: 100%;
     box-sizing: border-box;
 }
-h1, h2, h3 {
-    line-height: 1.2;
-    letter-spacing: -1pt;
+
+main {
+    display: flex;
+    flex-direction: column;
 }
-th, td {
+
+h1, h2 {
+    line-height: 0.8;
+    margin-top: 0;
+}
+
+h1 {
+    font-size: 48pt;
+    font-weight: 950; /* Extra Black */
+}
+
+h1 svg {
+    height: 0.8em;
+    vertical-align: baseline;
+    transform: translateY(4px);
+}
+
+h2 {
+    font-size: 32pt;
+    font-weight: 800; /* Heavy */
+}
+
+p, tbody {
+    font-weight: 300;
+}
+
+#members {
+    flex: 1 1 auto;
+}
+
+section {
+    margin-bottom: 32px;
+}
+
+#tablecontainer {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+}
+
+table {
+    border-collapse: collapse;
+}
+
+table td, table th {
+    padding: 4px 32px;
     text-align: left;
-    padding-right: 24px;
-    min-width: 100px;
-}
-td {
-    font-family: monospace;
-}
-footer {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-    box-sizing: border-box;
-    padding: 3em;
-    font-size: 14px;
-    text-align: center;
 }
 
-@keyframes lv {
-    0% {
-        background-position: 0 0;
-    }
-    100% {
-        background-position: 4000000px 4000000px;
-    }
+/* table tbody, table thead { */
+/*     border-width: 1pt 0 1pt 0; */
+/*     border-color: #262426; */
+/*     border-style: solid; */
+/* } */
+
+a:link {
+    color: #2874a6;
 }
 
-@media (prefers-color-scheme: dark) {
-    html {
-        background-color: #282828;
+@media (min-width: 540px) {
+    h1 {
+        font-size: 64pt;
     }
     body {
-        color: #ddd;
+        padding: 32px;
     }
-    #bgcover {
-        opacity: 12%;
-    }
-    a {
-        color: #abcdef;
-    }
-    a:visited {
-        color: #d2abef;
+    #tablecontainer {
+        justify-content: start;
     }
 }
 
-.tablecontainer {
-	overflow-x: auto;
+@media (min-width: 860px) {
+    h1 {
+        font-size: 128pt;
+        margin: 0 0 64px 0;
+    }
+    h2 {
+        font-size: 48pt;
+        margin: 0 0 32px 0;
+    }
+    h1 svg {
+        transform: translateY(8px);
+    }
+    p, table {
+        font-size: 14pt;
+    }
+}
+
+@media (min-width: 1280px) {
+    .wide.block, .wide {
+        display: block;
+    }
+    .wide.inline {
+        display: inline;
+    }
+    .small {
+        display: none;
+    }
+
+    main {
+        flex-direction: row;
+        gap: 48px;
+    }
+
+    section {
+        padding: 24px;
+    }
+
+    #members {
+        text-align: right;
+        padding-top: 24px;
+    }
+
+    #tablecontainer {
+        justify-content: end;
+    }
+
+    h1 {
+        margin-bottom: 72px;
+    }
 }
