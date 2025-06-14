@@ -1,5 +1,12 @@
 name: CI
-run-name: CI on ${{ github.ref_name }} by @${{ github.actor }}
+run-name: |
+  ${{
+    format(
+      'CI pipeline for {0} by @{1}',
+      github.event_name == 'pull_request' && format('#{0}', github.event.number) || github.ref_name,
+      github.actor
+    )
+  }}
 
 on:
   push:
@@ -15,7 +22,6 @@ on:
   pull_request:
     branches:
       - master
-      - rust
       - "release/*"
 
 env:
@@ -100,3 +106,34 @@ jobs:
 
       - name: Compile project
         run: cargo build --workspace --all-targets --release --locked
+
+  deploy:
+    name: Deploy
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+    needs:
+      - build
+      - test
+    runs-on: ubuntu-latest
+    environment: Production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: true
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: ci/ssh
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          rsync -vr ci/ssh/ ~/.ssh
+          echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+          chmod -R u=rwX,g=,o= ~/.ssh
+
+      - name: Build on Vulcan
+        run: ssh vulcan nix build "github:${{ github.repository }}/${{ github.sha }}"
+
+      - name: Deploy on Vulcan
+        run: ssh vulcan home-manager switch --flake "github:${{ github.repository }}/${{ github.sha }}"
