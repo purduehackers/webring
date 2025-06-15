@@ -18,10 +18,14 @@ use crate::{discord::Snowflake, webring::CheckLevel};
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Config {
+    /// Ring configuration
     pub webring: WebringTable,
+    /// Network/server configuration
     pub network: NetworkTable,
+    /// Logging configuration
     #[serde(default)]
     pub logging: LoggingTable,
+    /// Discord integration configuration
     pub discord: Option<DiscordTable>,
 
     /// Map from member name to their site details
@@ -46,11 +50,13 @@ pub struct WebringTable {
 }
 
 impl WebringTable {
+    /// Gets the base URL of the webring
     pub fn base_url(&self) -> Intern<Uri> {
         self.base_url
     }
 }
 
+/// Network/server configuration table
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct NetworkTable {
@@ -58,6 +64,7 @@ pub struct NetworkTable {
     pub listen_addr: SocketAddr,
 }
 
+/// Logging configuration table
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct LoggingTable {
@@ -82,6 +89,7 @@ impl Default for LoggingTable {
     }
 }
 
+/// Discord integration configuration table
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct DiscordTable {
@@ -103,7 +111,9 @@ pub struct MemberSpec {
         deserialize_with = "deserialize_interned_uri"
     )]
     uri: Intern<Uri>,
+    /// Discord ID of the member, if they opt in to Discord integration
     pub discord_id: Option<Snowflake>,
+    /// Level of checks to perform on the member's site
     #[serde(default)]
     pub check_level: CheckLevel,
 }
@@ -115,17 +125,24 @@ impl MemberSpec {
     }
 }
 
-// This type exists so serde can figure out what variants are available for the verbosity option.
-// If we use LevelFilter directly, it uses the Display and FromStr implementations, which means
-// there isn't a list of possible variants for clap to use.
+/// This type exists so serde can figure out what variants are available for the verbosity option.
+/// If we use [`LevelFilter`] directly, it uses the [`Display`][std::fmt::Display] and
+/// [`FromStr`][std::str::FromStr] implementations, which means there isn't a list of possible
+/// variants for clap to use.
 #[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "lowercase", remote = "LevelFilter")]
 enum LevelFilterWrapper {
+    /// No logging
     Off,
+    /// Log everything
     Trace,
+    /// Log debug messages and higher
     Debug,
+    /// Log informational messages and higher
     Info,
+    /// Log warnings and higher
     Warn,
+    /// Log errors only
     Error,
 }
 
@@ -147,7 +164,7 @@ fn default_address() -> Intern<Uri> {
     Intern::new(Uri::from_static(env!("CARGO_PKG_HOMEPAGE")))
 }
 
-// Deserialize an `Intern<Uri>` from a string value
+/// Deserialize an `Intern<Uri>` from a string value
 fn deserialize_interned_uri<'de, D>(deserializer: D) -> Result<Intern<Uri>, D::Error>
 where
     D: Deserializer<'de>,
@@ -162,7 +179,7 @@ where
     Ok(Intern::new(uri))
 }
 
-// Deserialize an `Option<Url>` from a string value
+/// Deserialize an `Option<Url>` from a string value
 fn deserialize_url<'de, D>(deserializer: D) -> Result<Url, D::Error>
 where
     D: Deserializer<'de>,
