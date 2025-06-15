@@ -16,6 +16,7 @@ edition = "2024"
 pedantic = { level = "warn", priority = -1 }
 # Slice indexing can always panic. Why only warn in match blocks?
 match-on-vec-items = "allow"
+missing-docs-in-private-items = "warn"
 
 [dependencies]
 axum = { version = "0.8.4", default-features = false, features = [ "http1", "http2", "tokio", "tracing", "query" ] }
