@@ -1,5 +1,6 @@
 //! Handles checking the webring sites for compliance with the webring requirements.
 
+use indoc::indoc;
 use lol_html::{
     element,
     send::{HtmlRewriter, Settings},
@@ -176,8 +177,8 @@ pub enum CheckFailure {
     Connection(reqwest::Error),
     /// Site returned a non-2xx response
     ResponseStatus(StatusCode),
-    /// Site returned a successful response but is missing the expected links
-    MissingLinks(MissingLinks),
+    /// Site returned a successful response but has issues with its webring links
+    LinkIssues(LinkStatuses),
     /// IO error
     IOError(std::io::Error),
     /// HTML parsing error
@@ -201,7 +202,7 @@ impl CheckFailure {
                 }
                 msg
             }
-            CheckFailure::MissingLinks(missing_links) => missing_links.to_string(),
+            CheckFailure::LinkIssues(missing_links) => missing_links.to_message(),
             CheckFailure::IOError(err) => {
                 format!("There was an IO error while reading the body of your site: {err}")
             }
@@ -221,19 +222,7 @@ impl Display for CheckFailure {
             CheckFailure::ResponseStatus(status_code) => {
                 write!(f, "Site returned {}", status_to_string(*status_code))
             }
-            CheckFailure::MissingLinks(missing_links) => {
-                let mut missing_link_names = Vec::with_capacity(3);
-                if missing_links.home {
-                    missing_link_names.push("ring homepage");
-                }
-                if missing_links.prev {
-                    missing_link_names.push("previous site");
-                }
-                if missing_links.next {
-                    missing_link_names.push("next site");
-                }
-                write!(f, "Missing links: {}", missing_link_names.join(", "))
-            }
+            CheckFailure::LinkIssues(links) => links.fmt(f),
             CheckFailure::IOError(e) => e.fmt(f),
             CheckFailure::ParsingError(e) => e.fmt(f),
         }
@@ -249,22 +238,37 @@ fn status_to_string(status: StatusCode) -> String {
     msg
 }
 
-/// Represents which of the expected webring links are missing from a site.
-#[derive(Debug, PartialEq, Eq)]
-pub struct MissingLinks {
-    /// Base address of the webring, used in to display the missing links.
+/// Represents the status of all expected links on a member site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkStatuses {
+    /// Base address used for [`to_message()`][LinkStatuses::to_message].
     base_address: Intern<Uri>,
-    /// Whether the webring homepage link is missing.
-    pub home: bool,
-    /// Whether the link to the next site is missing.
-    pub next: bool,
-    /// Whether the link to the previous site is missing.
-    pub prev: bool,
+    /// Status of the link to the webring homepage
+    pub home: LinkStatus,
+    /// Status of the link to the next member's site
+    pub next: LinkStatus,
+    /// Status of the link to the previous member's site
+    pub prev: LinkStatus,
+    /// Path of the previous link, if it was found.
+    /// This is used to render the message since there are two possible paths, `/prev` and `/previous`.
+    prev_path: Option<String>,
 }
 
-impl MissingLinks {
-    /// Should be called for every link on the page. If the inputted link matches any of the expected links, mark it as found.
-    fn found_link(&mut self, link: &Uri) {
+/// Represents the status of one of the expected links on a member site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkStatus {
+    /// The link is ok
+    Ok,
+    /// The link is missing
+    Missing,
+    /// The link is found but has a `target="..."` attribute
+    HasTarget,
+}
+
+impl LinkStatuses {
+    /// Should be called for every link on the page.
+    /// If the given link matches any of the expected links, mark it as found.
+    fn found_link(&mut self, link: &Uri, has_target: bool) {
         let authority = self.base_address.authority().unwrap();
 
         if ![None, Some(&Scheme::HTTPS), Some(&Scheme::HTTP)].contains(&link.scheme()) {
@@ -277,42 +281,101 @@ impl MissingLinks {
 
         let path = link.path().trim_matches('/');
 
+        let status = if has_target {
+            LinkStatus::HasTarget
+        } else {
+            LinkStatus::Ok
+        };
         match path {
-            "" => self.home = false,
-            "next" => self.next = false,
-            "prev" | "previous" => self.prev = false,
-            _ => {}
+            "" => self.home = status,
+            "next" => self.next = status,
+            "prev" | "previous" => {
+                self.prev = status;
+                self.prev_path = {
+                    let mut path = path.to_owned();
+                    path.insert(0, '/');
+                    Some(path)
+                };
+            }
+            _ => (),
         }
     }
 
-    /// Returns `true` if all expected links are found.
-    fn all_found(&self) -> bool {
-        !self.home && !self.next && !self.prev
+    /// Returns `true` if all expected links are [ok][LinkStatus::Ok].
+    fn all_ok(&self) -> bool {
+        [self.home, self.next, self.prev]
+            .into_iter()
+            .all(|status| status == LinkStatus::Ok)
+    }
+
+    /// Construct a message suitable for the site owner about the given link issues. For
+    /// a shorter message format suitable for debugging/logging, use the [`Display`] trait.
+    fn to_message(&self) -> String {
+        let mut msg = String::new();
+        let address_string = self.base_address.to_string();
+        let address = address_string.strip_suffix('/').unwrap_or(&address_string);
+        msg.push_str("Your site's webring links have the following issues:\n");
+        let statuses_and_paths = [
+            (self.home, ""),
+            (self.next, "/next"),
+            (self.prev, self.prev_path.as_deref().unwrap_or("/prev")),
+        ];
+        for (status, path) in statuses_and_paths {
+            match status {
+                LinkStatus::Ok => (),
+                LinkStatus::Missing => {
+                    writeln!(msg, "- Link to <{address}{path}> is missing").unwrap();
+                }
+                LinkStatus::HasTarget => {
+                    writeln!(
+                        msg,
+                        "- Link to <{address}{path}> has a `target=\"...\"` attribute"
+                    )
+                    .unwrap();
+                }
+            }
+        }
+
+        msg.push_str(indoc! {
+            "
+            What to do:
+            - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
+            - If you don't use anchor tags for the links, add the attribute `data-phwebring=\"prev\"|\"home\"|\"next\"` to the link elements.
+            - Don't include a `target` attribute on the links.
+            - If you think this alert is in error, send a message in #webring.
+            "
+        });
+        msg
     }
 }
 
-impl Display for MissingLinks {
+impl Display for LinkStatuses {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let address_string = self.base_address.to_string();
-        let address = address_string.strip_suffix('/').unwrap_or(&address_string);
-        writeln!(f, "Your site is missing the following links:")?;
-        if self.home {
-            writeln!(f, "- <{address}>")?;
+        let statuses_and_names = [
+            (self.home, "ring homepage"),
+            (self.next, "next site"),
+            (self.prev, "previous site"),
+        ];
+        let mut missing = Vec::with_capacity(3);
+        let mut has_target = Vec::with_capacity(3);
+        for (status, name) in statuses_and_names {
+            match status {
+                LinkStatus::Ok => (),
+                LinkStatus::Missing => missing.push(name.to_owned()),
+                LinkStatus::HasTarget => has_target.push(name.to_owned()),
+            }
         }
-        if self.next {
-            writeln!(f, "- <{address}/next>")?;
+        match (missing.is_empty(), has_target.is_empty()) {
+            (true, true) => write!(f, "Links are valid"),
+            (false, true) => write!(f, "Missing links: {}", missing.join(", ")),
+            (true, false) => write!(f, "Links with target attribute: {}", has_target.join(", ")),
+            (false, false) => write!(
+                f,
+                "Missing links: {}; links with target attribute: {}",
+                missing.join(", "),
+                has_target.join(", ")
+            ),
         }
-        if self.prev {
-            writeln!(f, "- <{address}/prev>")?;
-        }
-
-        writeln!(
-            f,
-            "\nWhat to do:
-- If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
-- If you don't use anchor tags for the links, add the attribute `data-phwebring=\"prev\"|\"home\"|\"next\"` to the link elements.
-- If you think this alert is in error, send a message in #webring."
-        )
     }
 }
 
@@ -321,12 +384,14 @@ async fn scan_for_links(
     mut webpage: impl Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
     base_address: Intern<Uri>,
 ) -> Result<(), CheckFailure> {
-    // This synchronization primitives should never actually be contented but it convinces Rust that the thing in question is `Send`. That way it can be kept across the `await`.
-    let missing_links = Mutex::new(MissingLinks {
+    // This synchronization primitives should never actually be contended but it convinces Rust
+    // that the thing in question is `Send`. That way it can be kept across the `await`.
+    let links = Mutex::new(LinkStatuses {
         base_address,
-        home: true,
-        next: true,
-        prev: true,
+        home: LinkStatus::Missing,
+        next: LinkStatus::Missing,
+        prev: LinkStatus::Missing,
+        prev_path: None,
     });
     let done = AtomicBool::new(false);
 
@@ -342,11 +407,12 @@ async fn scan_for_links(
                     else {
                         return Ok(());
                     };
+                    let has_target = el.get_attribute("target").is_some();
 
-                    let mut missing_links = missing_links.lock().unwrap();
-                    missing_links.found_link(&href);
+                    let mut links = links.lock().unwrap();
+                    links.found_link(&href, has_target);
 
-                    if missing_links.all_found() {
+                    if links.all_ok() {
                         done.store(true, Ordering::Relaxed);
                     }
 
@@ -358,16 +424,23 @@ async fn scan_for_links(
                     let decoded = html_escape::decode_html_entities(&attr);
                     let value = decoded.trim();
 
-                    let mut missing_links = missing_links.lock().unwrap();
+                    let status = match el.get_attribute("target") {
+                        Some(_) => LinkStatus::HasTarget,
+                        None => LinkStatus::Ok,
+                    };
 
+                    let mut links = links.lock().unwrap();
                     match value {
-                        "prev" | "previous" => missing_links.prev = false,
-                        "home" => missing_links.home = false,
-                        "next" => missing_links.next = false,
-                        _ => {}
+                        "prev" | "previous" => {
+                            links.prev = status;
+                            links.prev_path = Some(value.to_owned());
+                        }
+                        "home" => links.home = status,
+                        "next" => links.next = status,
+                        _ => (),
                     }
 
-                    if missing_links.all_found() {
+                    if links.all_ok() {
                         done.store(true, Ordering::Relaxed);
                     }
 
@@ -393,24 +466,24 @@ async fn scan_for_links(
 
     drop(rewriter);
 
-    Err(CheckFailure::MissingLinks(
-        missing_links.into_inner().unwrap(),
-    ))
+    Err(CheckFailure::LinkIssues(links.into_inner().unwrap()))
 }
 
 #[cfg(test)]
 mod tests {
     use axum::{Router, body::Bytes, http::Uri, response::Html, routing::get};
     use futures::stream;
+    use indoc::indoc;
+    use pretty_assertions::assert_eq;
     use reqwest::StatusCode;
     use sarlacc::Intern;
 
-    use super::{CheckFailure, CheckLevel, MissingLinks, check, scan_for_links};
+    use super::{CheckFailure, CheckLevel, LinkStatus, LinkStatuses, check, scan_for_links};
 
     async fn assert_links_gives(
         base_address: &'static str,
         file: &str,
-        res: impl Into<Option<(bool, bool, bool)>>,
+        res: impl Into<Option<(LinkStatus, LinkStatus, LinkStatus)>>,
     ) {
         assert_eq!(
             match scan_for_links(
@@ -422,14 +495,18 @@ mod tests {
             .await
             {
                 Ok(()) => None,
-                Err(CheckFailure::MissingLinks(missing)) => Some(missing),
+                Err(CheckFailure::LinkIssues(mut missing)) => {
+                    missing.prev_path = None; // We don't care about the path for these tests
+                    Some(missing)
+                }
                 e => panic!("{e:?}"),
             },
-            res.into().map(|(home, prev, next)| MissingLinks {
+            res.into().map(|(home, prev, next)| LinkStatuses {
                 home,
                 next,
                 prev,
-                base_address: Intern::new(Uri::from_static(base_address))
+                base_address: Intern::new(Uri::from_static(base_address)),
+                prev_path: None,
             })
         );
     }
@@ -455,7 +532,7 @@ mod tests {
             "<div>
                 <area href=\"ADDRESS\"></area>
             </div>",
-            (false, true, true),
+            (LinkStatus::Ok, LinkStatus::Missing, LinkStatus::Missing),
         )
         .await;
     }
@@ -467,7 +544,7 @@ mod tests {
             "<carousel>
                 <a href=\"ADDRESSprev?query=huh\"></a>
             </carousel>",
-            (true, false, true),
+            (LinkStatus::Missing, LinkStatus::Ok, LinkStatus::Missing),
         )
         .await;
     }
@@ -482,7 +559,7 @@ mod tests {
             <thingy>
                 <a href=\" \n     \t  ADDRESSprevious?query=huh   \t\n  \"></a>
             </thingy>",
-            (true, false, true),
+            (LinkStatus::Missing, LinkStatus::Ok, LinkStatus::Missing),
         )
         .await;
     }
@@ -494,7 +571,7 @@ mod tests {
             "<body>
                 <area href=\"ADDRESSnext/\"></area>
             </body>",
-            (true, true, false),
+            (LinkStatus::Missing, LinkStatus::Missing, LinkStatus::Ok),
         )
         .await;
     }
@@ -517,7 +594,11 @@ mod tests {
             <b href=\"ADDRESS\"></b>
             <b href=\"ADDRESS/prev\"></b>
             <b href=\"ADDRESS/next\"></b>",
-            (true, true, true),
+            (
+                LinkStatus::Missing,
+                LinkStatus::Missing,
+                LinkStatus::Missing,
+            ),
         )
         .await;
     }
@@ -543,7 +624,7 @@ mod tests {
             "<div>
                 <b data-phwebring=\"\n \t    home   \t     \n  \"></b>
             </div>",
-            (false, true, true),
+            (LinkStatus::Ok, LinkStatus::Missing, LinkStatus::Missing),
         )
         .await;
     }
@@ -555,7 +636,7 @@ mod tests {
             "<body>
                 <b data-phwebring=\"prev\"></b>
             </body>",
-            (true, false, true),
+            (LinkStatus::Missing, LinkStatus::Ok, LinkStatus::Missing),
         )
         .await;
     }
@@ -567,7 +648,7 @@ mod tests {
             "<body>
                 <b data-phwebring=\"previous\"></b>
             </body>",
-            (true, false, true),
+            (LinkStatus::Missing, LinkStatus::Ok, LinkStatus::Missing),
         )
         .await;
     }
@@ -579,9 +660,93 @@ mod tests {
             "<body>
                 <b data-phwebring=\"next\"></b>
             </body>",
-            (true, true, false),
+            (LinkStatus::Missing, LinkStatus::Missing, LinkStatus::Ok),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn has_target() {
+        assert_links_gives(
+            "https://ring.purduehackers.com",
+            r#"<body>
+                <a href="ADDRESS" target="_blank"></a>
+                <a href="ADDRESS/next" target></a>
+            </body>"#,
+            (
+                LinkStatus::HasTarget,
+                LinkStatus::Missing,
+                LinkStatus::HasTarget,
+            ),
+        )
+        .await;
+    }
+
+    #[test]
+    fn link_statuses_display() {
+        use LinkStatus::*;
+
+        let subtests = [
+            // (home, prev, next, expected)
+            (Ok, Ok, Ok, "Links are valid"),
+            (Missing, Ok, Ok, "Missing links: ring homepage"),
+            (Ok, Missing, Ok, "Missing links: previous site"),
+            (Ok, Ok, Missing, "Missing links: next site"),
+            (
+                HasTarget,
+                Ok,
+                Ok,
+                "Links with target attribute: ring homepage",
+            ),
+            (
+                Ok,
+                HasTarget,
+                Ok,
+                "Links with target attribute: previous site",
+            ),
+            (Ok, Ok, HasTarget, "Links with target attribute: next site"),
+            (
+                HasTarget,
+                Missing,
+                HasTarget,
+                "Missing links: previous site; links with target attribute: ring homepage, next site",
+            ),
+        ];
+
+        for (home, prev, next, expected) in subtests {
+            let statuses = LinkStatuses {
+                base_address: Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+                home,
+                next,
+                prev,
+                prev_path: None,
+            };
+            assert_eq!(expected, statuses.to_string());
+        }
+    }
+
+    #[test]
+    fn test_link_status_message() {
+        let links = LinkStatuses {
+            base_address: Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            home: LinkStatus::Missing,
+            next: LinkStatus::Ok,
+            prev: LinkStatus::HasTarget,
+            prev_path: Some("/previous".to_string()),
+        };
+        let expected = indoc! {
+            "
+            Your site's webring links have the following issues:
+            - Link to <https://ring.purduehackers.com> is missing
+            - Link to <https://ring.purduehackers.com/previous> has a `target=\"...\"` attribute
+            What to do:
+            - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
+            - If you don't use anchor tags for the links, add the attribute `data-phwebring=\"prev\"|\"home\"|\"next\"` to the link elements.
+            - Don't include a `target` attribute on the links.
+            - If you think this alert is in error, send a message in #webring.
+            "
+        };
+        assert_eq!(expected, links.to_message());
     }
 
     #[tokio::test]
@@ -632,7 +797,7 @@ mod tests {
             (
                 Uri::from_static("http://127.0.0.1:32750/up"),
                 vec![CheckLevel::None, CheckLevel::JustOnline],
-                |failure| matches!(failure, CheckFailure::MissingLinks(_)),
+                |failure| matches!(failure, CheckFailure::LinkIssues(_)),
             ),
             (
                 Uri::from_static("http://127.0.0.1:32750/links"),
