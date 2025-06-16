@@ -29,6 +29,12 @@ const USER_AGENT: &str = concat!(
 /// Represents a snowflake, the type used to encode identifiers in Discord APIs.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Snowflake(u64);
+impl Snowflake {
+    /// Create a new snowflake from the given value.
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
 impl From<u64> for Snowflake {
     fn from(value: u64) -> Self {
         Self(value)
