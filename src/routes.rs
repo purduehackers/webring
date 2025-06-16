@@ -308,7 +308,7 @@ enum RouteError {
     MissingOriginURI,
 
     /// The request did not contain a redirect URI, but it was required, e.g. to redirect the user to a member's site.
-    #[error("Request doesn't indicate which site it it is redirecting to.")]
+    #[error("Request doesn't indicate which site it is redirecting to.")]
     MissingRedirectURI,
 
     /// A header in the request could not be converted to a string because it contained invalid UTF-8 data.
