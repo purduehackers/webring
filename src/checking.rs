@@ -202,7 +202,7 @@ impl CheckFailure {
                 }
                 msg
             }
-            CheckFailure::LinkIssues(missing_links) => missing_links.to_message(),
+            CheckFailure::LinkIssues(issues) => issues.to_message(),
             CheckFailure::IOError(err) => {
                 format!("There was an IO error while reading the body of your site: {err}")
             }
@@ -251,7 +251,7 @@ pub struct LinkStatuses {
     pub prev: LinkStatus,
     /// Path of the previous link, if it was found.
     /// This is used to render the message since there are two possible paths, `/prev` and `/previous`.
-    prev_path: Option<String>,
+    prev_path: Option<&'static str>,
 }
 
 /// Represents the status of one of the expected links on a member site.
@@ -289,13 +289,13 @@ impl LinkStatuses {
         match path {
             "" => self.home = status,
             "next" => self.next = status,
-            "prev" | "previous" => {
+            "prev" => {
                 self.prev = status;
-                self.prev_path = {
-                    let mut path = path.to_owned();
-                    path.insert(0, '/');
-                    Some(path)
-                };
+                self.prev_path = Some("/prev");
+            }
+            "previous" => {
+                self.prev = status;
+                self.prev_path = Some("/previous");
             }
             _ => (),
         }
@@ -308,6 +308,20 @@ impl LinkStatuses {
             .all(|status| status == LinkStatus::Ok)
     }
 
+    /// Returns `true` if any of the expected links are missing.
+    fn any_missing(&self) -> bool {
+        [self.home, self.next, self.prev]
+            .into_iter()
+            .any(|status| status == LinkStatus::Missing)
+    }
+
+    /// Returns `true` if any of the expected links has a `target="..."` attribute.
+    fn any_have_target(&self) -> bool {
+        [self.home, self.next, self.prev]
+            .into_iter()
+            .any(|status| status == LinkStatus::HasTarget)
+    }
+
     /// Construct a message suitable for the site owner about the given link issues. For
     /// a shorter message format suitable for debugging/logging, use the [`Display`] trait.
     fn to_message(&self) -> String {
@@ -318,7 +332,7 @@ impl LinkStatuses {
         let statuses_and_paths = [
             (self.home, ""),
             (self.next, "/next"),
-            (self.prev, self.prev_path.as_deref().unwrap_or("/prev")),
+            (self.prev, self.prev_path.unwrap_or("/prev")),
         ];
         for (status, path) in statuses_and_paths {
             match status {
@@ -336,15 +350,19 @@ impl LinkStatuses {
             }
         }
 
-        msg.push_str(indoc! {
-            "
-            What to do:
-            - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
-            - If you don't use anchor tags for the links, add the attribute `data-phwebring=\"prev\"|\"home\"|\"next\"` to the link elements.
-            - Don't include a `target` attribute on the links.
-            - If you think this alert is in error, send a message in #webring.
-            "
-        });
+        msg.push_str("\nWhat to do:\n");
+        if self.any_missing() {
+            msg.push_str(indoc! {
+                r#"
+                - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
+                - If you don't use anchor tags for the links, add the attribute `data-phwebring="prev"|"home"|"next"` to the link elements.
+                "#
+            });
+        }
+        if self.any_have_target() {
+            msg.push_str("- Don't include a `target` attribute on the links.\n");
+        }
+        msg.push_str("- If you think this alert is in error, send a message in #webring.\n");
         msg
     }
 }
@@ -431,9 +449,13 @@ async fn scan_for_links(
 
                     let mut links = links.lock().unwrap();
                     match value {
-                        "prev" | "previous" => {
+                        "prev" => {
                             links.prev = status;
-                            links.prev_path = Some(value.to_owned());
+                            links.prev_path = Some("/prev");
+                        }
+                        "previous" => {
+                            links.prev = status;
+                            links.prev_path = Some("/previous");
                         }
                         "home" => links.home = status,
                         "next" => links.next = status,
@@ -732,19 +754,60 @@ mod tests {
             home: LinkStatus::Missing,
             next: LinkStatus::Ok,
             prev: LinkStatus::HasTarget,
-            prev_path: Some("/previous".to_string()),
+            prev_path: Some("/previous"),
         };
         let expected = indoc! {
-            "
+            r#"
             Your site's webring links have the following issues:
             - Link to <https://ring.purduehackers.com> is missing
-            - Link to <https://ring.purduehackers.com/previous> has a `target=\"...\"` attribute
+            - Link to <https://ring.purduehackers.com/previous> has a `target="..."` attribute
+
             What to do:
             - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
-            - If you don't use anchor tags for the links, add the attribute `data-phwebring=\"prev\"|\"home\"|\"next\"` to the link elements.
+            - If you don't use anchor tags for the links, add the attribute `data-phwebring="prev"|"home"|"next"` to the link elements.
             - Don't include a `target` attribute on the links.
             - If you think this alert is in error, send a message in #webring.
-            "
+            "#
+        };
+        assert_eq!(expected, links.to_message());
+
+        let links = LinkStatuses {
+            base_address: Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            home: LinkStatus::Ok,
+            next: LinkStatus::Ok,
+            prev: LinkStatus::HasTarget,
+            prev_path: Some("/previous"),
+        };
+        let expected = indoc! {
+            r#"
+            Your site's webring links have the following issues:
+            - Link to <https://ring.purduehackers.com/previous> has a `target="..."` attribute
+
+            What to do:
+            - Don't include a `target` attribute on the links.
+            - If you think this alert is in error, send a message in #webring.
+            "#
+        };
+        assert_eq!(expected, links.to_message());
+
+        let links = LinkStatuses {
+            base_address: Intern::new(Uri::from_static("https://ring.purduehackers.com")),
+            home: LinkStatus::Missing,
+            next: LinkStatus::Missing,
+            prev: LinkStatus::Ok,
+            prev_path: Some("/previous"),
+        };
+        let expected = indoc! {
+            r#"
+            Your site's webring links have the following issues:
+            - Link to <https://ring.purduehackers.com> is missing
+            - Link to <https://ring.purduehackers.com/next> is missing
+
+            What to do:
+            - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
+            - If you don't use anchor tags for the links, add the attribute `data-phwebring="prev"|"home"|"next"` to the link elements.
+            - If you think this alert is in error, send a message in #webring.
+            "#
         };
         assert_eq!(expected, links.to_message());
     }
