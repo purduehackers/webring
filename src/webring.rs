@@ -1,3 +1,5 @@
+//! Ring behavior and data structures
+
 use std::{
     net::IpAddr,
     path::{Path, PathBuf},
@@ -28,13 +30,17 @@ use crate::{
     stats::{Stats, UNKNOWN_ORIGIN},
 };
 
+/// Represents the level of checking to perform on a member's website.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CheckLevel {
+    /// Don't perform any checks; site is always considered available.
     #[serde(alias = "off")]
     None,
+    /// Perform a basic check to see if the site is online, i.e. returns an HTTP 2xx response.
     #[serde(rename = "online", alias = "up")]
     JustOnline,
+    /// Check that the site is online and that its webring links are present and valid.
     #[serde(rename = "links", alias = "full")]
     ForLinks,
 }
@@ -46,13 +52,20 @@ impl Default for CheckLevel {
     }
 }
 
+/// Ring member
 #[derive(Clone, Debug)]
 struct Member {
+    /// Name of the member, primarily for display on the homepage
     name: String,
+    /// URI of the member's site
     website: Intern<Uri>,
+    /// Authority (a.k.a. host or domain) of the member's site
     authority: Intern<Authority>,
+    /// Discord ID of the member, if they opt in to [Discord integration][crate::discord].
     discord_id: Option<Snowflake>,
+    /// Level of checking to perform on the member's site
     check_level: CheckLevel,
+    /// Whether the last check was successful
     check_successful: Arc<AtomicBool>,
 }
 
@@ -70,6 +83,8 @@ impl From<(&str, &MemberSpec)> for Member {
 }
 
 impl Member {
+    /// Checks the member's site, and stores the result. If the check fails and the member has
+    /// opted in to notifications, also notifies them of the failure.
     fn check_and_store_and_optionally_notify(
         &self,
         base_address: Intern<Uri>,
@@ -104,6 +119,7 @@ impl Member {
     }
 }
 
+/// Map of members in the webring, indexed by their authority (host).
 type MemberMap = IndexMap<Intern<Authority>, Member>;
 
 /// Constructs a [`MemberMap`] from the `members` table of a [`Config`] object.
@@ -121,17 +137,27 @@ fn member_map_from_config_table(config_table: &IndexMap<String, MemberSpec>) -> 
 /// The data structure underlying a webring. Implements the core webring functionality.
 #[derive(Debug)]
 pub struct Webring {
+    /// Map of members in the webring, indexed by their authority (host).
     // https://docs.rs/tokio/latest/tokio/sync/struct.Mutex.html#which-kind-of-mutex-should-you-use
     // This is a good case for std locks because we will never need to hold it across an await
     members: RwLock<MemberMap>,
+    /// Cached rendered homepage
     // This one we would like to hold across awaits
     homepage: AsyncRwLock<Option<Arc<Homepage>>>,
+    /// Directory where static content is to be served from.
     static_dir_path: PathBuf,
+    /// File watcher for reloading the webring or homepage when the config file or homepage
+    /// template changes
     file_watcher: OnceLock<RecommendedWatcher>,
+    /// Base address of the webring, used to know what fully-formed webring links should look like.
     base_address: Intern<Uri>,
+    /// Base authority of the webring
     base_authority: Intern<Authority>,
+    /// Discord notifier for notifying members of issues with their sites
     notifier: Option<Arc<DiscordNotifier>>,
+    /// Statistics collected about the ring
     stats: Arc<Stats>,
+    /// Current configuration of the webring, used for detecting changes when reloading
     config: Arc<AsyncRwLock<Option<Config>>>,
 }
 
@@ -198,7 +224,8 @@ impl Webring {
         *self.homepage.write().await = None;
     }
 
-    /// Query everyone's webpages and check them according to their respective check levels.
+    /// Performs checks on all members of the webring, updating their `check_successful` fields and
+    /// notifying them if configured.
     pub async fn check_members(&self) {
         let mut tasks = self
             .members
@@ -219,6 +246,8 @@ impl Webring {
         *self.homepage.write().await = None;
     }
 
+    /// Get the authority part of the given URI, returning an error if it doesn't have one or if it
+    /// doesn't exist in the intern table.
     fn get_authority(uri: &Uri) -> Result<Intern<Authority>, TraverseWebringError> {
         let authority = uri
             .authority()
@@ -227,6 +256,7 @@ impl Webring {
             .ok_or_else(|| TraverseWebringError::AuthorityNotFound(authority.to_owned()))
     }
 
+    /// Gets the index of the member in the webring and a read lock on the member map.
     fn member_idx_and_lock(
         &self,
         uri: &Uri,
@@ -243,7 +273,7 @@ impl Webring {
         ))
     }
 
-    /// Get the next page in the webring from the given URI based on the authority part
+    /// Gets the next page in the webring from the given URI based on the authority part
     pub fn next_page(&self, uri: &Uri, ip: IpAddr) -> Result<Intern<Uri>, TraverseWebringError> {
         let (mut idx, authority, inner) = self.member_idx_and_lock(uri)?;
 
@@ -403,9 +433,12 @@ impl Webring {
     ///
     /// This function must be called from a tokio runtime.
     pub fn enable_reloading(self: &Arc<Self>, config_file: &Path) -> eyre::Result<()> {
+        /// Represents a detected live reload event.
         #[derive(Debug, Copy, Clone, PartialEq, Eq)]
         enum LiveReloadEvent {
+            /// Reload the configuration file
             Config,
+            /// Reload the homepage
             Homepage,
         }
 
@@ -560,13 +593,17 @@ impl Webring {
     }
 }
 
+/// Errors that can occur when traversing the webring.
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum TraverseWebringError {
+    /// The given origin URI does not have a host component, i.e. it is not an absolute URI.
     #[error("The given origin URI ({0}) doesn't have a host component")]
     NoAuthority(Uri),
+    /// An origin was given but it doesn't match any member of the webring.
     #[error("The given origin host ({0}) does not appear to be a member of the webring")]
     AuthorityNotFound(Authority),
-    /// This may be returned even if the origin URI is passing because jumping to the same URI is undesirable
+    /// No members are considered available (i.e. passing checks), so there's no one to route to.
+    /// This may be returned even if the origin site is available because jumping to the same site is undesirable.
     #[error("All sites in the webring are currently down or failing our status checks")]
     AllMembersFailing,
 }

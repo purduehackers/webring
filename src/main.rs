@@ -1,3 +1,7 @@
+//! # Purdue Hackers Webring
+//!
+//! Implements a web server that serves the Purdue Hackers Webring.
+
 use std::{
     io::{IsTerminal, stderr},
     net::SocketAddr,

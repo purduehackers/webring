@@ -1,3 +1,5 @@
+//! Handles checking the webring sites for compliance with the webring requirements.
+
 use lol_html::{
     element,
     send::{HtmlRewriter, Settings},
@@ -23,8 +25,10 @@ use tokio::sync::RwLock;
 
 use crate::webring::CheckLevel;
 
+/// The time in milliseconds for which the server is considered online after a successful ping.
 static ONLINE_CHECK_TTL_MS: i64 = 1000;
 
+/// The HTTP client used to make requests to the webring sites for validation.
 static CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
         .user_agent(format!(
@@ -37,7 +41,7 @@ static CLIENT: LazyLock<Client> = LazyLock::new(|| {
         .expect("Creating the HTTP client should not fail")
 });
 
-// (Last pinged, Was ping successful) — Used to check if the server is online
+/// (Last pinged, Was ping successful) — Used to check if the server is online
 static PING_INFO: RwLock<(i64, bool)> = RwLock::const_new((i64::MIN, false));
 
 /// If a request succeeds, then call this function to mark the server as definitely online.
@@ -127,6 +131,10 @@ pub async fn check(
     }
 }
 
+/// Perform the actual check for the given website and check level.
+///
+/// If the site fails any check, returns `Some(CheckFailure)`.
+/// If the site passes all checks, returns `None`.
 async fn check_impl(
     website: &Uri,
     check_level: CheckLevel,
@@ -241,11 +249,16 @@ fn status_to_string(status: StatusCode) -> String {
     msg
 }
 
+/// Represents which of the expected webring links are missing from a site.
 #[derive(Debug, PartialEq, Eq)]
 pub struct MissingLinks {
+    /// Base address of the webring, used in to display the missing links.
     base_address: Intern<Uri>,
+    /// Whether the webring homepage link is missing.
     pub home: bool,
+    /// Whether the link to the next site is missing.
     pub next: bool,
+    /// Whether the link to the previous site is missing.
     pub prev: bool,
 }
 
@@ -272,6 +285,7 @@ impl MissingLinks {
         }
     }
 
+    /// Returns `true` if all expected links are found.
     fn all_found(&self) -> bool {
         !self.home && !self.next && !self.prev
     }
@@ -302,6 +316,7 @@ impl Display for MissingLinks {
     }
 }
 
+/// Parse the HTML of a webpage and scan it for the expected links.
 async fn scan_for_links(
     mut webpage: impl Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
     base_address: Intern<Uri>,

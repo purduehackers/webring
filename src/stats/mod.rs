@@ -1,3 +1,5 @@
+//! Statistics collection and processing
+
 // TODO: Everything in this file
 #![allow(dead_code)]
 #![allow(unused_variables)]
@@ -16,21 +18,27 @@ use log::info;
 use papaya::HashMap;
 use sarlacc::Intern;
 
+/// The TTL for IP tracking entries, after which they are considered stale and removed.
 const IP_TRACKING_TTL: chrono::TimeDelta = Duration::days(1);
+/// The time zone of the webring.
 pub const TIMEZONE: chrono::FixedOffset = FixedOffset::west_opt(5 * 3600).unwrap();
 
+/// Placeholder origin to use when the origin is unknown.
 pub static UNKNOWN_ORIGIN: LazyLock<Intern<Authority>> =
     LazyLock::new(|| Intern::new("unknown".parse().unwrap()));
 
+/// Information about a client IP address
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct IpInfo {
+    /// The last time this IP address was seen
     last_seen: DateTime<Utc>,
+    /// The authority this IP address started from
     started_from: Intern<Authority>,
 }
 
 #[derive(Debug, Default)]
 struct AggregatedStats {
-    // (Date (with timezone `TIMEZONE`), From, To, Started From) → Count
+    /// (Date (with timezone `TIMEZONE`), From, To, Started From) → Count
     #[expect(clippy::type_complexity)]
     counters: HashMap<
         (
@@ -45,11 +53,14 @@ struct AggregatedStats {
 
 #[derive(Debug, Default)]
 pub struct Stats {
+    /// Aggregated statistics
     aggregated: AggregatedStats,
+    /// Map of IP information keyed by IP address
     ip_tracking: HashMap<IpAddr, IpInfo>,
 }
 
 impl Stats {
+    /// Creates a new instance of `Stats`.
     pub fn new() -> Stats {
         Stats {
             aggregated: AggregatedStats::default(),
@@ -57,10 +68,14 @@ impl Stats {
         }
     }
 
+    /// Records a redirect event from one authority to another for a given client IP address.
     pub fn redirected(&self, ip: IpAddr, from: Intern<Authority>, to: Intern<Authority>) {
         self.redirected_impl(ip, from, to, Utc::now());
     }
 
+    /// Records a redirect event from one authority to another for a given client IP address at a specific time.
+    ///
+    /// Split apart to allow injecting the current time for testing purposes.
     fn redirected_impl(
         &self,
         ip: IpAddr,
@@ -90,10 +105,14 @@ impl Stats {
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Prunes stale IP addresses from the tracking map.
     pub fn prune_seen_ips(&self) {
         self.prune_seen_ips_impl(Utc::now());
     }
 
+    /// Implementation of the IP pruning logic.
+    ///
+    /// Split apart to allow injecting the current time for testing purposes.
     #[expect(clippy::cast_possible_wrap)]
     fn prune_seen_ips_impl(&self, now: DateTime<Utc>) {
         let mut ip_tracking = self.ip_tracking.pin();

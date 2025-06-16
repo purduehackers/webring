@@ -1,3 +1,5 @@
+//! Handles rendering the webring homepage
+
 use std::path::Path;
 
 use axum::http::{
@@ -8,12 +10,16 @@ use sarlacc::Intern;
 use serde::Serialize;
 use tera::Tera;
 
+/// Represents the rendered webring homepage
 #[derive(Clone, Debug)]
 pub struct Homepage {
+    /// The rendered HTML content of the homepage
     html: String,
 }
 
 impl Homepage {
+    /// Creates a new `Homepage` instance by reading the `index.html` template from the specified
+    /// directory and rendering it with the provided members and base address.
     pub async fn new(
         static_dir: &Path,
         base_address: Intern<Uri>,
@@ -30,15 +36,20 @@ impl Homepage {
         Ok(Self { html })
     }
 
+    /// Returns the rendered HTML content of the homepage.
     pub fn to_html(&self) -> &str {
         &self.html
     }
 }
 
+/// Represents the information about a member to be displayed on the homepage.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct MemberForHomepage {
+    /// Member's name
     pub name: String,
+    /// Member's website URI
     pub website: SerializableUri,
+    /// Whether the member's website check was successful
     pub check_successful: bool,
 }
 

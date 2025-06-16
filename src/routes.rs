@@ -29,6 +29,7 @@ use tower_http::{
 
 use crate::webring::{TraverseWebringError, Webring};
 
+/// Static HTML template for rendering error responses.
 static ERROR_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_error_template);
 
 /// Creates a [`Router`] with the routes for our application.
@@ -75,6 +76,10 @@ pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
     router.layer(CatchPanicLayer::custom(PanicResponse))
 }
 
+/// Creates a Tera template for rendering error pages.
+///
+/// The template is baked into the binary at compile time using `include_str!`, so it is guaranteed
+/// to be correct and renderable.
 fn create_error_template() -> Tera {
     let html_src = include_str!("templates/error.html");
     let css_src = include_str!("templates/error.css");
@@ -99,6 +104,7 @@ fn redirect_with_content(to: &Uri) -> impl IntoResponse + use<> {
     )
 }
 
+/// Serve the homepage at `/`
 async fn serve_index(
     State(webring): State<Arc<Webring>>,
     headers: HeaderMap,
@@ -253,9 +259,12 @@ fn get_origin_from_request(
     }
 }
 
+/// Represents the part of the request where the origin URI was found.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 enum OriginUriLocation {
+    /// The `Referer` header
     RefererHeader,
+    /// The `?host=` query parameter
     HostQueryParam,
 }
 
@@ -269,32 +278,44 @@ impl Display for OriginUriLocation {
     }
 }
 
+/// Represents errors that can occur while routing requests.
 #[derive(Debug, thiserror::Error)]
 enum RouteError {
+    /// An origing URI was needed to find the next/previous site in the ring, but it was invalid.
     #[error(r#"Origin URI "{uri}" found in {place} is invalid: {reason}."#)]
     InvalidOriginURI {
+        /// The origin URI that was found to be invalid
         uri: String,
+        /// The reason why the URI was invalid
         #[source]
         reason: InvalidUri,
+        /// Where in the request the URI was found
         place: OriginUriLocation,
     },
 
+    /// The URI to which the server should redirect the client was invalid.
     #[error(r#"Redirect URI "{uri}" is invalid: {reason}."#)]
     InvalidRedirectURI {
+        /// The redirect URI that was found to be invalid
         uri: String,
+        /// The reason why the URI was invalid
         #[source]
         reason: InvalidUri,
     },
 
+    /// The request did not contain an origin URI, but it was required, e.g. to find the next/previous site.
     #[error("Request doesn't indicate which site it originates from.")]
     MissingOriginURI,
 
-    #[error("Request doesn't indicate which site it it is redirecting to.")]
+    /// The request did not contain a redirect URI, but it was required, e.g. to redirect the user to a member's site.
+    #[error("Request doesn't indicate which site it is redirecting to.")]
     MissingRedirectURI,
 
+    /// A header in the request could not be converted to a string because it contained invalid UTF-8 data.
     #[error("{0} contains data which is not valid UTF-8.")]
     HeaderToStr(OriginUriLocation),
 
+    /// An error occurred while traversing the webring.
     #[error("Error traversing webring: {0}")]
     Traversal(
         #[from]
@@ -302,6 +323,7 @@ enum RouteError {
         TraverseWebringError,
     ),
 
+    /// An error occurred while rendering the homepage.
     #[error("Error rendering homepage: {0}.")]
     RenderHomepage(
         #[from]
@@ -309,9 +331,11 @@ enum RouteError {
         eyre::Report,
     ),
 
+    /// No route was found for the given request path.
     #[error("No handler for path {0}")]
     NoRoute(Uri),
 
+    /// A static file was requested, but it does not exist.
     #[error("File {0} does not exist")]
     FileNotFound(String),
 }
@@ -374,6 +398,7 @@ impl IntoResponse for RouteError {
     }
 }
 
+/// A response type that can be used to render an error page when a panic occurs.
 #[derive(Copy, Clone, Debug)]
 struct PanicResponse;
 

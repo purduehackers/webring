@@ -52,9 +52,12 @@ impl Display for Snowflake {
     }
 }
 
+/// A notifier that sends messages to a Discord channel using a webhook URL.
 #[derive(Clone, Debug)]
 pub struct DiscordNotifier {
+    /// The webhook URL to send messages to.
     webhook_url: reqwest::Url,
+    /// HTTP client used to send requests.
     client: Client,
 }
 
@@ -91,6 +94,14 @@ impl DiscordNotifier {
         Ok(())
     }
 
+    /// Sends a single message to the Discord webhook.
+    ///
+    /// Returns the HTTP [`Response`] from the API.
+    ///
+    /// # Errors
+    ///
+    /// On request error, returns an `Err` with the error details, but with the URL stripped, so it
+    /// can safely be logged or displayed to a user.
     async fn send_single_message(
         &self,
         ping: Option<Snowflake>,
@@ -119,6 +130,8 @@ impl DiscordNotifier {
 }
 
 /// Sleep for the number of seconds specified in the `Retry-After` HTTP header of a response.
+///
+/// # Errors
 ///
 /// Returns an `Err` if the `Retry-After` value cannot be parsed.
 async fn sleep_from_retry_after(header_val: &HeaderValue) -> eyre::Result<()> {
