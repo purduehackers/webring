@@ -24,7 +24,12 @@ use reqwest::{Client, Response, StatusCode};
 use sarlacc::Intern;
 use tokio::sync::RwLock;
 
-use crate::webring::CheckLevel;
+use crate::{discord::Snowflake, webring::CheckLevel};
+
+/// Discord ID of the #webring channel
+// TODO: We might want to move this to the config file
+#[allow(clippy::unreadable_literal)]
+const WEBRING_CHANNEL: Snowflake = Snowflake::new(1319140464812753009);
 
 /// The time in milliseconds for which the server is considered online after a successful ping.
 static ONLINE_CHECK_TTL_MS: i64 = 1000;
@@ -362,7 +367,11 @@ impl LinkStatuses {
         if self.any_have_target() {
             msg.push_str("- Don't include a `target` attribute on the links.\n");
         }
-        msg.push_str("- If you think this alert is in error, send a message in #webring.\n");
+        writeln!(
+            &mut msg,
+            "- If you think this alert is in error, send a message in <#{WEBRING_CHANNEL}>."
+        )
+        .unwrap();
         msg
     }
 }
@@ -495,12 +504,14 @@ async fn scan_for_links(
 mod tests {
     use axum::{Router, body::Bytes, http::Uri, response::Html, routing::get};
     use futures::stream;
-    use indoc::indoc;
+    use indoc::formatdoc;
     use pretty_assertions::assert_eq;
     use reqwest::StatusCode;
     use sarlacc::Intern;
 
-    use super::{CheckFailure, CheckLevel, LinkStatus, LinkStatuses, check, scan_for_links};
+    use super::{
+        CheckFailure, CheckLevel, LinkStatus, LinkStatuses, WEBRING_CHANNEL, check, scan_for_links,
+    };
 
     async fn assert_links_gives(
         base_address: &'static str,
@@ -756,7 +767,7 @@ mod tests {
             prev: LinkStatus::HasTarget,
             prev_path: Some("/previous"),
         };
-        let expected = indoc! {
+        let expected = formatdoc! {
             r#"
             Your site's webring links have the following issues:
             - Link to <https://ring.purduehackers.com> is missing
@@ -766,7 +777,7 @@ mod tests {
             - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
             - If you don't use anchor tags for the links, add the attribute `data-phwebring="prev"|"home"|"next"` to the link elements.
             - Don't include a `target` attribute on the links.
-            - If you think this alert is in error, send a message in #webring.
+            - If you think this alert is in error, send a message in <#{WEBRING_CHANNEL}>.
             "#
         };
         assert_eq!(expected, links.to_message());
@@ -778,14 +789,14 @@ mod tests {
             prev: LinkStatus::HasTarget,
             prev_path: Some("/previous"),
         };
-        let expected = indoc! {
+        let expected = formatdoc! {
             r#"
             Your site's webring links have the following issues:
             - Link to <https://ring.purduehackers.com/previous> has a `target="..."` attribute
 
             What to do:
             - Don't include a `target` attribute on the links.
-            - If you think this alert is in error, send a message in #webring.
+            - If you think this alert is in error, send a message in <#{WEBRING_CHANNEL}>.
             "#
         };
         assert_eq!(expected, links.to_message());
@@ -797,7 +808,7 @@ mod tests {
             prev: LinkStatus::Ok,
             prev_path: Some("/previous"),
         };
-        let expected = indoc! {
+        let expected = formatdoc! {
             r#"
             Your site's webring links have the following issues:
             - Link to <https://ring.purduehackers.com> is missing
@@ -806,7 +817,7 @@ mod tests {
             What to do:
             - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
             - If you don't use anchor tags for the links, add the attribute `data-phwebring="prev"|"home"|"next"` to the link elements.
-            - If you think this alert is in error, send a message in #webring.
+            - If you think this alert is in error, send a message in <#{WEBRING_CHANNEL}>.
             "#
         };
         assert_eq!(expected, links.to_message());
