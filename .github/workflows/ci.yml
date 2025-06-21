@@ -21,7 +21,7 @@ env:
 
 jobs:
   clippy:
-    name: Lint code
+    name: Lint Rust code
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: '-D warnings'
@@ -37,8 +37,34 @@ jobs:
       - name: Cache build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Lint code
+      - name: Lint Rust code
         run: cargo clippy --all-targets --workspace --locked
+
+  prettier:
+    name: Lint UI code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Install pNPM
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: |
+          pnpm install
+          echo "PATH=$(pwd)/node_modules/.bin:$PATH" >> $GITHUB_ENV
+
+      - name: Lint UI code
+        run: prettier --check --config .prettierrc static
 
   fmt:
     name: Check formatting
