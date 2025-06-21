@@ -1,81 +1,108 @@
-#bgcover {
-    z-index: -1000;
-    position: fixed;
-    top: 0;
-    left: 0;
-    height: 100dvh;
-    width: 100vw;
-    background-image: url("/static/PurdueHackers.svg");
-    background-size: 70px;
-    opacity: 40%;
-}
-@media not (prefers-reduced-motion) {
-    #bgcover {
-        animation: lv 150000s linear infinite;
-    }
-}
 body {
-    position: relative;
-    margin: 0 auto;
-    max-width: 650px;
-    line-height: 1.6;
-    font-size: 18px;
-    color: #383838;
-    padding: 60px 24px 200px 24px;
-    font-family: "Verdana", "Helvetica", sans-serif;
-    min-height: 100dvh;
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        avenir next,
+        avenir,
+        segoe ui,
+        helvetica neue,
+        Cantarell,
+        Ubuntu,
+        roboto,
+        noto,
+        helvetica,
+        arial,
+        sans-serif;
+    margin: 0;
+    padding: 32px 16px;
+    color: #262426; /* From logo color */
+    width: fit-content;
+    min-width: 100%;
     box-sizing: border-box;
 }
-h1, h2, h3 {
-    line-height: 1.2;
-    letter-spacing: -1pt;
+
+main {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
 }
-th, td {
+
+#titlesec {
+    width: min-content;
+}
+
+#members {
+    width: max-content;
+}
+
+@media (max-width: calc(80vw + 14em)) {
+    main {
+        flex-direction: column;
+    }
+
+    #titlesec {
+        width: auto;
+    }
+}
+
+h1,
+h2 {
+    line-height: 0.8;
+    margin-top: 0;
+}
+
+h1 {
+    font-size: clamp(4em, 13vw, 16em);
+    font-weight: 950; /* Extra Black */
+    margin-bottom: 0.5em;
+}
+
+.nowrap {
+    white-space: nowrap;
+}
+
+h1 svg {
+    height: 0.8em;
+    vertical-align: baseline;
+    transform: translateY(4px);
+}
+
+h2 {
+    font-size: clamp(2.5em, 2em + 2vw, 4em);
+    font-weight: 800; /* Heavy */
+}
+
+p,
+tbody {
+    font-weight: 300;
+}
+
+section {
+    margin-bottom: 32px;
+}
+
+#tablecontainer {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+}
+
+table {
+    border-collapse: collapse;
+}
+
+table td,
+table th {
+    padding: 4px 32px;
     text-align: left;
-    padding-right: 24px;
-    min-width: 100px;
-}
-td {
-    font-family: monospace;
-}
-footer {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-    box-sizing: border-box;
-    padding: 3em;
-    font-size: 14px;
-    text-align: center;
 }
 
-@keyframes lv {
-    0% {
-        background-position: 0 0;
-    }
-    100% {
-        background-position: 4000000px 4000000px;
-    }
-}
+/* table tbody, table thead { */
+/*     border-width: 1pt 0 1pt 0; */
+/*     border-color: #262426; */
+/*     border-style: solid; */
+/* } */
 
-@media (prefers-color-scheme: dark) {
-    html {
-        background-color: #282828;
-    }
-    body {
-        color: #ddd;
-    }
-    #bgcover {
-        opacity: 12%;
-    }
-    a {
-        color: #abcdef;
-    }
-    a:visited {
-        color: #d2abef;
-    }
-}
-
-.tablecontainer {
-	overflow-x: auto;
+a:link {
+    color: #2874a6;
 }
