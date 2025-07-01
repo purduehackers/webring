@@ -21,7 +21,7 @@ missing-docs-in-private-items = "warn"
 [dependencies]
 axum = { version = "0.8.4", default-features = false, features = [ "http1", "http2", "tokio", "tracing", "query" ] }
 chrono = { version = "0.4.41", default-features = false, features = [ "serde", "now" ] }
-clap = { version = "4.5.38", features = ["derive"] }
+clap = { version = "4.5.40", features = ["derive"] }
 eyre = "0.6.12"
 ftail = "0.3.0"
 futures = { version = "0.3.31", default-features = false, features = [ "alloc" ] }
