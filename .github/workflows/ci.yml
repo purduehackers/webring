@@ -105,6 +105,7 @@ jobs:
         run: cargo test --workspace --all-targets --no-fail-fast --locked
 
       - name: Run ignored tests
+        if: ${{ env.DISCORD_WEBHOOK_URL != '' }}
         run: cargo test --workspace --all-targets --no-fail-fast --locked -- --ignored
 
   # Adding this because we don't want to run the whole build workflow on each
