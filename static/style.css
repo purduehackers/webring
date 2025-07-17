@@ -16,8 +16,7 @@ body {
     margin: 0;
     padding: 32px 16px;
     color: #262426; /* From logo color */
-    width: fit-content;
-    min-width: 100%;
+    width: 100%;
     box-sizing: border-box;
 }
 
@@ -29,20 +28,12 @@ main {
 
 #titlesec {
     width: min-content;
+    max-width: 100%;
 }
 
 #members {
     width: max-content;
-}
-
-@media (max-width: calc(80vw + 14em)) {
-    main {
-        flex-direction: column;
-    }
-
-    #titlesec {
-        width: auto;
-    }
+    max-width: 100%;
 }
 
 h1,
@@ -83,17 +74,17 @@ section {
 
 #tablecontainer {
     display: flex;
-    flex-direction: row;
-    justify-content: center;
+    flex-direction: column;
+    align-items: center;
 }
 
 table {
-    border-collapse: collapse;
+    border-spacing: 32px 0;
 }
 
 table td,
 table th {
-    padding: 4px 32px;
+    padding: 4px 0;
     text-align: left;
 }
 
@@ -105,4 +96,27 @@ table th {
 
 a:link {
     color: #2874a6;
+}
+
+/* For very small screens */
+@media (max-width: 400px) {
+    table {
+        border-spacing: 24px 0;
+    }
+}
+
+/* For small and medium screens */
+@media (max-width: calc(80vw + 14em)) {
+    main {
+        flex-direction: column;
+    }
+
+    #titlesec {
+        width: auto;
+    }
+
+    #tablecontainer {
+        align-items: start;
+        overflow-x: auto;
+    }
 }
