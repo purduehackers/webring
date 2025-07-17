@@ -41,7 +41,7 @@ serde_json = "1.0.140"
 tera = { version = "1.20.0", default-features = false, features = [ "urlencode" ] }
 thiserror = { version = "2.0.12", default-features = false }
 tokio = { version = "1.46.1", features = ["macros", "rt-multi-thread"] }
-toml = { version = "0.8.23", default-features = false, features = ["preserve_order", "parse"] }
+toml = { version = "0.9.2", default-features = false, features = ["preserve_order", "parse", "serde", "std"] }
 tower-http = { version = "0.6.6", features = ["cors", "fs", "catch-panic"] }
 
 [dev-dependencies]
