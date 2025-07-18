@@ -87,10 +87,6 @@ jobs:
   test:
     name: Run tests
     runs-on: ubuntu-latest
-    environment: Testing
-    env:
-      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-      DISCORD_PING_USER_ID: ${{ secrets.DISCORD_PING_USER_ID }}
     steps:
       - name: Check out sources
         uses: actions/checkout@v4
@@ -103,10 +99,6 @@ jobs:
 
       - name: Run default tests
         run: cargo test --workspace --all-targets --no-fail-fast --locked
-
-      - name: Run ignored tests
-        if: ${{ env.DISCORD_WEBHOOK_URL != '' }}
-        run: cargo test --workspace --all-targets --no-fail-fast --locked -- --ignored
 
   # Adding this because we don't want to run the whole build workflow on each
   # push

@@ -905,7 +905,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "Kian's site could go down"]
     async fn kians_site() {
         let base = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
 
