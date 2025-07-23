@@ -292,7 +292,8 @@ impl LinkStatuses {
             LinkStatus::Ok
         };
         match path {
-            "" => self.home = status,
+            // Special case: don't complain about `target=` attributes on the homepage link
+            "" => self.home = LinkStatus::Ok,
             "next" => self.next = status,
             "prev" => {
                 self.prev = status;
@@ -707,7 +708,7 @@ mod tests {
                 <a href="ADDRESS/next" target></a>
             </body>"#,
             (
-                LinkStatus::HasTarget,
+                LinkStatus::Ok, // Special case: homepage link is ok
                 LinkStatus::Missing,
                 LinkStatus::HasTarget,
             ),
