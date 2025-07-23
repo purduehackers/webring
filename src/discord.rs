@@ -4,7 +4,13 @@
 //!
 //! [webhook-api-ref]: https://discord.com/developers/docs/resources/webhook#execute-webhook
 
-use std::{fmt::Display, str::FromStr, time::Duration};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    str::FromStr,
+    sync::{Mutex, MutexGuard},
+    time::Duration,
+};
 
 use eyre::{Context, bail};
 use reqwest::{
@@ -13,6 +19,9 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+/// Maximum number of attempts to send a message before giving up.
+const MAX_DELIVERY_ATTEMPTS: usize = 5;
 
 /// A user agent representing our program. [Required by Discord][api-doc-ua].
 ///
@@ -59,12 +68,15 @@ impl Display for Snowflake {
 }
 
 /// A notifier that sends messages to a Discord channel using a webhook URL.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct DiscordNotifier {
     /// The webhook URL to send messages to.
     webhook_url: reqwest::Url,
     /// HTTP client used to send requests.
     client: Client,
+    /// Set of pending messages to be sent.
+    /// Map from recipient -> (message, attempt count).
+    message_queue: Mutex<HashMap<Option<Snowflake>, (String, usize)>>,
 }
 
 impl DiscordNotifier {
@@ -74,11 +86,68 @@ impl DiscordNotifier {
         Self {
             webhook_url: webhook_url.to_owned(),
             client: Client::new(),
+            message_queue: Mutex::new(HashMap::new()),
         }
     }
 
+    /// Lock the message queue, recovering from a poisoned lock if necessary.
+    fn lock_message_queue(&self) -> MutexGuard<'_, HashMap<Option<Snowflake>, (String, usize)>> {
+        // If the lock is poisoned, we clear it and return a new lock.
+        self.message_queue.lock().unwrap_or_else(|mut err| {
+            log::error!("Discord notification queue was poisoned; some notifications may be lost");
+            **err.get_mut() = HashMap::new();
+            self.message_queue.clear_poison();
+            err.into_inner()
+        })
+    }
+
+    /// Enqueue a message to be sent to the Discord channel the next time notifications are
+    /// dispatched.
+    ///
+    /// Only one message is sent per user per notification dispatch, so if a message was already
+    /// enqueued with the same `ping` value, it will be replaced with the new message.
+    pub fn enqueue_message(&self, ping: Option<Snowflake>, message: String) {
+        self.lock_message_queue().insert(ping, (message, 0));
+    }
+
+    /// Dispatch all messages in the queue, sending them to Discord.
+    ///
+    /// Returns `(n_sent, n_failed)` where `n_sent` is the number of messages that were sent
+    /// successfully, and `n_failed` is the number of messages that failed to send. Errors are
+    /// logged but not returned.
+    pub async fn dispatch_messages(&self) -> (usize, usize) {
+        // Take the map to avoid race conditions while sending messages.
+        let mut map = {
+            let mut lock = self.lock_message_queue();
+            std::mem::take(&mut *lock)
+        };
+        let mut sent = 0;
+        let mut failed = 0;
+        for (ping, (message, attempts)) in map.drain() {
+            if attempts >= MAX_DELIVERY_ATTEMPTS {
+                log::error!(
+                    "Failed to send message to {} after {attempts} attempts; giving up",
+                    ping.map_or("channel".to_string(), |id| id.to_string())
+                );
+                continue;
+            }
+            if let Err(err) = self.send_message(ping, &message).await {
+                log::error!("Failed to send Discord message: {err}");
+                // If no new message was enqueued for the same recipient, retry this one.
+                let mut lock = self.lock_message_queue();
+                if lock.get(&ping).is_none() {
+                    lock.insert(ping, (message, attempts + 1));
+                }
+                failed += 1;
+            } else {
+                sent += 1;
+            }
+        }
+        (sent, failed)
+    }
+
     /// Send a message in the channel this notifier is registered to.
-    pub async fn send_message(&self, ping: Option<Snowflake>, message: &str) -> eyre::Result<()> {
+    async fn send_message(&self, ping: Option<Snowflake>, message: &str) -> eyre::Result<()> {
         loop {
             let response = self.send_single_message(ping, message).await?;
             // If we get rate limited, try again.
@@ -153,9 +222,10 @@ async fn sleep_from_retry_after(header_val: &HeaderValue) -> eyre::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use httpmock::{Method, MockServer};
     use reqwest::Url;
 
-    use super::DiscordNotifier;
+    use super::{DiscordNotifier, MAX_DELIVERY_ATTEMPTS};
 
     /// Tests sending a message in Discord.
     ///
@@ -178,5 +248,60 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    /// Tests that messages destined for the same user are deduplicated
+    #[tokio::test]
+    async fn test_dispatch_deduplicate() {
+        let server = MockServer::start_async().await;
+        let mock = server.mock(|when, then| {
+            when.method(Method::POST);
+            then.status(200);
+        });
+        let notifier = DiscordNotifier::new(&Url::parse(&server.base_url()).unwrap());
+
+        notifier.enqueue_message(Some(1234.into()), "first message".to_string());
+        // Next message should replace the first one
+        notifier.enqueue_message(Some(1234.into()), "second message".to_string());
+        notifier.enqueue_message(Some(4321.into()), "message for other user".to_string());
+        notifier.enqueue_message(None, "message for no user".to_string());
+
+        let (sent, failed) = notifier.dispatch_messages().await;
+
+        assert_eq!(3, sent);
+        assert_eq!(0, failed);
+        assert_eq!(3, mock.hits_async().await);
+
+        // Ensure sent messages were removed
+        let (sent, failed) = notifier.dispatch_messages().await;
+        assert_eq!(0, sent);
+        assert_eq!(0, failed);
+        assert_eq!(3, mock.hits_async().await); // 3 were sent last round
+    }
+
+    #[tokio::test]
+    async fn test_give_up_after_max_attempts() {
+        let server = MockServer::start_async().await;
+        let mock = server.mock(|when, then| {
+            when.method(Method::POST);
+            then.status(500);
+        });
+        let notifier = DiscordNotifier::new(&Url::parse(&server.base_url()).unwrap());
+
+        notifier.enqueue_message(Some(1234.into()), "test message".to_string());
+
+        // Expect MAX_DELIVERY_ATTEMPTS attempts
+        for i in 0..MAX_DELIVERY_ATTEMPTS {
+            let (sent, failed) = notifier.dispatch_messages().await;
+            assert_eq!(0, sent);
+            assert_eq!(1, failed);
+            assert_eq!(i + 1, mock.hits_async().await);
+        }
+
+        // Expect no more attempts
+        let (sent, failed) = notifier.dispatch_messages().await;
+        assert_eq!(0, sent);
+        assert_eq!(0, failed);
+        assert_eq!(MAX_DELIVERY_ATTEMPTS, mock.hits_async().await);
     }
 }

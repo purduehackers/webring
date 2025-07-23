@@ -79,6 +79,21 @@ async fn main() -> ExitCode {
         });
     }
 
+    // Send Discord notifications every 24 hours
+    if let Some(notifier) = webring.notifier() {
+        const DISCORD_NOTIFICATION_INTERVAL: Duration = Duration::from_secs(60 * 60 * 24);
+        let notifier = Arc::clone(notifier);
+        tokio::spawn(async move {
+            loop {
+                let (sent, failed) = notifier.dispatch_messages().await;
+                if sent > 0 || failed > 0 {
+                    info!("Discord notifications dispatched: {sent} sent, {failed} failed");
+                }
+                tokio::time::sleep(DISCORD_NOTIFICATION_INTERVAL).await;
+            }
+        });
+    }
+
     webring.enable_ip_pruning(chrono::Duration::hours(1));
     if let Err(err) = webring.enable_reloading(&cli.config_file) {
         log::error!("Failed to watch configuration files for changes: {err}");
