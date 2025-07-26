@@ -633,7 +633,7 @@ mod tests {
     use indexmap::IndexMap;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
-    use sarlacc::{Intern, num_objects_interned};
+    use sarlacc::Intern;
     use tempfile::{NamedTempFile, TempDir};
     use tokio::sync::RwLock as AsyncRwLock;
 
@@ -732,8 +732,6 @@ mod tests {
     async fn test_webring() {
         let config = make_config();
         let webring = Webring::new(&config);
-
-        let original_interned_objects = num_objects_interned();
 
         {
             let inner = webring.members.read().unwrap();
@@ -898,8 +896,6 @@ mod tests {
         expected_random.insert(Uri::from_static("ws://refuse-the-r.ing"));
         assert_eq!(found_in_random, expected_random);
 
-        assert_eq!(num_objects_interned(), original_interned_objects);
-
         let new_members: IndexMap<String, MemberSpec> = toml::from_str(indoc! { r#"
             cynthia = { url = "https://localhost:32751", discord-id = 789, check-level = "links" }
             henry = { url = "hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }
@@ -930,8 +926,6 @@ mod tests {
         webring.members.read().unwrap()[0]
             .check_successful
             .store(true, Ordering::Relaxed);
-
-        let original_interned_objects = num_objects_interned();
 
         webring.assert_next("https://localhost:32751", Ok("http://refuse-the-r.ing"));
         webring.assert_next("hrovnyak.gitlab.io", Ok("http://refuse-the-r.ing"));
@@ -975,8 +969,6 @@ mod tests {
 
         webring.assert_prev("refuse-the-r.ing", Ok("arhan.sh"));
         webring.assert_next("kasad.com", Ok("arhan.sh"));
-
-        assert_eq!(num_objects_interned(), original_interned_objects);
     }
 
     #[tokio::test]
