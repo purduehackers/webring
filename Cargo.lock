@@ -2199,9 +2199,9 @@ dependencies = [
 
 [[package]]
 name = "sarlacc"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6eaadb3173b4b723de1763d81576b4dead3b9cb3a49098fca15f04ad614d4f2"
+checksum = "f7cd2706a0716cc80f397638cbc120463e6788b866371a4097e51ad676bb53ed"
 dependencies = [
  "seize",
 ]
