@@ -19,13 +19,14 @@ use axum::{
     response::{Html, IntoResponse, NoContent, Response},
     routing::get,
 };
-use log::warn;
 use tera::Tera;
 use tower_http::{
     catch_panic::{CatchPanicLayer, ResponseForPanic},
     cors::{Any, CorsLayer},
     services::ServeDir,
+    trace::TraceLayer,
 };
+use tracing::warn;
 
 use crate::webring::{TraverseWebringError, Webring};
 
@@ -58,7 +59,8 @@ pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
             async |request: Request| -> RouteError {
                 RouteError::NoRoute(request.uri().to_owned())
             },
-        ));
+        ))
+        .layer(TraceLayer::new_for_http());
 
     // Add debugging routes
     if cfg!(debug_assertions) {
@@ -372,9 +374,9 @@ impl IntoResponse for RouteError {
                 StatusCode::NOT_FOUND => "The page you requested doesn't exist.",
                 other => {
                     warn!(
-                        "Error code without registered message was returned: {} ({})",
-                        other.as_u16(),
-                        other.canonical_reason().unwrap_or("")
+                        status.code = other.as_u16(),
+                        status.text = other.canonical_reason().unwrap_or(""),
+                        "Error status without registered message was returned",
                     );
                     "We're not quite sure."
                 }

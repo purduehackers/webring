@@ -19,10 +19,10 @@ use axum::{
 };
 use chrono::Utc;
 use futures::{Stream, TryStreamExt};
-use log::info;
 use reqwest::{Client, Response, StatusCode};
 use sarlacc::Intern;
 use tokio::sync::RwLock;
+use tracing::{error, info};
 
 use crate::{discord::Snowflake, webring::CheckLevel};
 
@@ -124,14 +124,16 @@ pub async fn check(
             // and count the check as successful.
             if let CheckFailure::Connection(connection_error) = &failure {
                 if !is_online().await {
-                    log::error!(
-                        "Server-side connectivity issue detected: Could not reach {website}: {connection_error}"
+                    error!(
+                        site = %website,
+                        err = %connection_error,
+                        "Server-side connectivity issue detected: could not reach site"
                     );
                     return Err(());
                 }
             }
 
-            info!("{website} failed a check: {failure}");
+            info!(site = %website, %failure, "site failed a check");
             Ok(Some(failure))
         }
     }

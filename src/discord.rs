@@ -19,6 +19,7 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tracing::error;
 
 /// Maximum number of attempts to send a message before giving up.
 const MAX_DELIVERY_ATTEMPTS: usize = 5;
@@ -94,7 +95,7 @@ impl DiscordNotifier {
     fn lock_message_queue(&self) -> MutexGuard<'_, HashMap<Option<Snowflake>, (String, usize)>> {
         // If the lock is poisoned, we clear it and return a new lock.
         self.message_queue.lock().unwrap_or_else(|mut err| {
-            log::error!("Discord notification queue was poisoned; some notifications may be lost");
+            error!("Discord notification queue was poisoned; some notifications may be lost");
             **err.get_mut() = HashMap::new();
             self.message_queue.clear_poison();
             err.into_inner()
@@ -125,14 +126,15 @@ impl DiscordNotifier {
         let mut failed = 0;
         for (ping, (message, attempts)) in map.drain() {
             if attempts >= MAX_DELIVERY_ATTEMPTS {
-                log::error!(
-                    "Failed to send message to {} after {attempts} attempts; giving up",
-                    ping.map_or("channel".to_string(), |id| id.to_string())
+                error!(
+                    channel = %ping.map_or("channel".to_string(), |id| id.to_string()),
+                    attempts,
+                    "Failed to send message to channel after several attempts; giving up",
                 );
                 continue;
             }
             if let Err(err) = self.send_message(ping, &message).await {
-                log::error!("Failed to send Discord message: {err}");
+                error!(%err, "Failed to send Discord message");
                 // If no new message was enqueued for the same recipient, retry this one.
                 let mut lock = self.lock_message_queue();
                 if lock.get(&ping).is_none() {

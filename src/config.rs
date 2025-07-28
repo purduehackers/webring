@@ -7,10 +7,10 @@ use std::{
 
 use axum::http::Uri;
 use indexmap::IndexMap;
-use log::LevelFilter;
 use reqwest::Url;
 use sarlacc::Intern;
 use serde::{Deserialize, Deserializer, de};
+use tracing::level_filters::LevelFilter;
 
 use crate::{discord::Snowflake, webring::CheckLevel};
 
@@ -69,7 +69,7 @@ pub struct NetworkTable {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct LoggingTable {
     /// Log verbosity
-    #[serde(alias = "level", with = "LevelFilterWrapper")]
+    #[serde(alias = "level", deserialize_with = "deserialize_level_filter")]
     pub verbosity: LevelFilter,
 
     /// File to print logs to in addition to the console
@@ -80,9 +80,9 @@ impl Default for LoggingTable {
     fn default() -> Self {
         Self {
             verbosity: if cfg!(debug_assertions) {
-                LevelFilter::Debug
+                LevelFilter::DEBUG
             } else {
-                LevelFilter::Info
+                LevelFilter::INFO
             },
             log_file: None,
         }
@@ -130,7 +130,7 @@ impl MemberSpec {
 /// [`FromStr`][std::str::FromStr] implementations, which means there isn't a list of possible
 /// variants for clap to use.
 #[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
-#[serde(rename_all = "lowercase", remote = "LevelFilter")]
+#[serde(rename_all = "lowercase")]
 enum LevelFilterWrapper {
     /// No logging
     Off,
@@ -149,14 +149,23 @@ enum LevelFilterWrapper {
 impl From<LevelFilterWrapper> for LevelFilter {
     fn from(val: LevelFilterWrapper) -> Self {
         match val {
-            LevelFilterWrapper::Off => LevelFilter::Off,
-            LevelFilterWrapper::Trace => LevelFilter::Trace,
-            LevelFilterWrapper::Debug => LevelFilter::Debug,
-            LevelFilterWrapper::Info => LevelFilter::Info,
-            LevelFilterWrapper::Warn => LevelFilter::Warn,
-            LevelFilterWrapper::Error => LevelFilter::Error,
+            LevelFilterWrapper::Off => LevelFilter::OFF,
+            LevelFilterWrapper::Trace => LevelFilter::TRACE,
+            LevelFilterWrapper::Debug => LevelFilter::DEBUG,
+            LevelFilterWrapper::Info => LevelFilter::INFO,
+            LevelFilterWrapper::Warn => LevelFilter::WARN,
+            LevelFilterWrapper::Error => LevelFilter::ERROR,
         }
     }
+}
+
+/// Deserialize a [`LevelFilter`] by deserializing a [`LevelFilterWrapper`] first and converting it
+/// using [`From<LevelFilterWrapper>`].
+fn deserialize_level_filter<'de, D>(deserializer: D) -> Result<LevelFilter, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    LevelFilterWrapper::deserialize(deserializer).map(LevelFilter::from)
 }
 
 /// Get default webring base address.
@@ -211,10 +220,10 @@ mod tests {
     use axum::http::Uri;
     use indexmap::IndexMap;
     use indoc::indoc;
-    use log::LevelFilter;
     use pretty_assertions::assert_eq;
     use reqwest::Url;
     use sarlacc::Intern;
+    use tracing::level_filters::LevelFilter;
 
     use crate::{config::MemberSpec, discord::Snowflake, webring::CheckLevel};
 
@@ -247,7 +256,7 @@ mod tests {
                 listen_addr: "0.0.0.0:3000".parse().unwrap(),
             },
             logging: LoggingTable {
-                verbosity: LevelFilter::Info,
+                verbosity: LevelFilter::INFO,
                 log_file: None,
             },
             discord: Some(DiscordTable {
@@ -297,9 +306,9 @@ mod tests {
         assert_eq!(
             LoggingTable {
                 verbosity: if cfg!(debug_assertions) {
-                    LevelFilter::Debug
+                    LevelFilter::DEBUG
                 } else {
-                    LevelFilter::Info
+                    LevelFilter::INFO
                 },
                 log_file: None
             },

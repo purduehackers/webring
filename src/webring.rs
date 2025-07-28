@@ -17,10 +17,10 @@ use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use rand::seq::SliceRandom;
 use tokio::sync::RwLock as AsyncRwLock;
 
-use log::{error, warn};
 use sarlacc::Intern;
 use serde::Deserialize;
 use thiserror::Error;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     checking::check,
@@ -447,7 +447,7 @@ impl Webring {
         /// Check if two paths refer to the same file
         fn files_match(a: &Path, b: &Path) -> bool {
             same_file::is_same_file(a, b).unwrap_or_else(|err| {
-                log::error!("Error comparing file paths: {err}");
+                error!(%err, "Error comparing file paths");
                 false
             })
         }
@@ -462,7 +462,7 @@ impl Webring {
                 match maybe_event {
                     Ok(event) => {
                         for path in &event.paths {
-                            log::debug!("Event observed on {}: {:?}", path.display(), event.kind);
+                            debug!(file = %path.display(), ?event.kind, "Event observed");
                         }
                         // We only care about events that update the file
                         if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
@@ -486,7 +486,7 @@ impl Webring {
                             }
                             // A file we weren't watching was updated?
                             else {
-                                log::warn!("Unexpected file updated: {}", path.display());
+                                warn!(file = %path.display(), "Unexpected file updated");
                             }
                         }
 
@@ -499,7 +499,7 @@ impl Webring {
                                 // This must succeed, because the webring
                                 match kind {
                                     LiveReloadEvent::Config => {
-                                        log::info!("Configuration file updated; reloading members");
+                                        info!("Configuration file updated; reloading members");
                                         // Load new config
                                         match Config::parse_from_file(&config_file_path_for_task)
                                             .await
@@ -513,7 +513,7 @@ impl Webring {
                                                         // warn about it.
                                                         let old_config = webring.config.read().await;
                                                         if old_config.as_ref().is_some_and(|old| Config::diff_settings(old, &new_config)) {
-                                                            log::warn!("Some non-member settings were changed. These will not be applied until the webring is restarted.");
+                                                            warn!("Some non-member settings were changed. These will not be applied until the webring is restarted.");
                                                         }
                                                     },
                                                     async {
@@ -526,16 +526,16 @@ impl Webring {
                                                 *webring.config.write().await = Some(new_config);
                                             }
                                             Err(err) => {
-                                                log::error!(
-                                                    "Failed to load configuration from {}: {}",
-                                                    config_file_path_for_task.display(),
-                                                    err
+                                                error!(
+                                                    file = %config_file_path_for_task.display(),
+                                                    %err,
+                                                    "Failed to load configuration from file",
                                                 );
                                             }
                                         }
                                     }
                                     LiveReloadEvent::Homepage => {
-                                        log::info!(
+                                        info!(
                                             "Homepage template updated; invalidating cached homepage"
                                         );
                                         webring.invalidate_homepage().await;
@@ -546,7 +546,7 @@ impl Webring {
                     }
                     Err(err) => {
                         for path in &err.paths {
-                            log::error!("Error watching {}: {err}", path.display());
+                            error!(file = %path.display(), %err, "Error watching file");
                         }
                     }
                 }
