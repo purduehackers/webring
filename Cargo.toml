@@ -38,7 +38,7 @@ same-file = "1.0.6"
 sarlacc = "0.1.4"
 # sarlacc = { path = "../sarlacc" }
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
+serde_json = "1.0.141"
 tera = { version = "1.20.0", default-features = false, features = [ "urlencode" ] }
 thiserror = { version = "2.0.12", default-features = false }
 tokio = { version = "1.47.0", features = ["macros", "rt-multi-thread"] }
