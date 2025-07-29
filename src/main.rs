@@ -15,7 +15,7 @@ use clap::Parser;
 use config::Config;
 use routes::create_router;
 use sarlacc::num_objects_interned;
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 use tracing_subscriber::prelude::*;
 use webring::Webring;
 
@@ -36,17 +36,17 @@ struct CliOptions {
 }
 
 #[tokio::main]
+#[instrument]
 async fn main() -> ExitCode {
     // Parse CLI options
     let cli = CliOptions::parse();
 
     // Load config
-    let cfg = match Config::parse_from_file(&cli.config_file).await {
-        Ok(cfg) => Arc::new(cfg),
-        Err(err) => {
-            eprintln!("Failed to read configuration file: {err}");
-            return ExitCode::FAILURE;
-        }
+    let Ok(cfg) = Config::parse_from_file(&cli.config_file)
+        .await
+        .map(Arc::new)
+    else {
+        return ExitCode::FAILURE;
     };
 
     // Set up logging
@@ -105,10 +105,7 @@ async fn main() -> ExitCode {
         let notifier = Arc::clone(notifier);
         tokio::spawn(async move {
             loop {
-                let (sent, failed) = notifier.dispatch_messages().await;
-                if sent > 0 || failed > 0 {
-                    info!(sent, failed, "Discord notifications dispatched");
-                }
+                notifier.dispatch_messages().await;
                 tokio::time::sleep(DISCORD_NOTIFICATION_INTERVAL).await;
             }
         });

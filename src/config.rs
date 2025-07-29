@@ -10,7 +10,7 @@ use indexmap::IndexMap;
 use reqwest::Url;
 use sarlacc::Intern;
 use serde::{Deserialize, Deserializer, de};
-use tracing::level_filters::LevelFilter;
+use tracing::{instrument, level_filters::LevelFilter};
 
 use crate::{discord::Snowflake, webring::CheckLevel};
 
@@ -198,6 +198,7 @@ where
 
 impl Config {
     /// Load configuration from the given TOML file.
+    #[instrument(err)]
     pub async fn parse_from_file(path: &Path) -> eyre::Result<Self> {
         let file_contents = tokio::fs::read_to_string(path).await?;
         Ok(toml::from_str(&file_contents)?)

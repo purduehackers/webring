@@ -20,7 +20,7 @@ use tokio::sync::RwLock as AsyncRwLock;
 use sarlacc::Intern;
 use serde::Deserialize;
 use thiserror::Error;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, field::display, info, instrument, warn};
 
 use crate::{
     checking::check,
@@ -85,11 +85,14 @@ impl From<(&str, &MemberSpec)> for Member {
 impl Member {
     /// Checks the member's site, and stores the result. If the check fails and the member has
     /// opted in to notifications, also notifies them of the failure.
+    #[instrument(name = "webring.check_member", skip_all, fields(site))]
     fn check_and_store_and_optionally_notify(
         &self,
         base_address: Intern<Uri>,
         notifier: Option<Arc<DiscordNotifier>>,
     ) -> impl Future<Output = ()> + Send + 'static {
+        tracing::Span::current().record("site", display(&self.website));
+
         let website = self.website;
         let check_level = self.check_level;
         let successful = Arc::clone(&self.check_successful);
@@ -228,6 +231,7 @@ impl Webring {
 
     /// Performs checks on all members of the webring, updating their `check_successful` fields and
     /// notifying them if configured.
+    #[instrument(name = "webring.check_members", skip(self))]
     pub async fn check_members(&self) {
         let mut tasks = self
             .members
