@@ -14,9 +14,9 @@ use std::{
 
 use axum::http::uri::Authority;
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, Utc};
-use log::info;
 use papaya::HashMap;
 use sarlacc::Intern;
+use tracing::{info, instrument};
 
 /// The TTL for IP tracking entries, after which they are considered stale and removed.
 const IP_TRACKING_TTL: chrono::TimeDelta = Duration::days(1);
@@ -106,6 +106,7 @@ impl Stats {
     }
 
     /// Prunes stale IP addresses from the tracking map.
+    #[instrument(name = "stats.prune_seen_ips", skip(self))]
     pub fn prune_seen_ips(&self) {
         self.prune_seen_ips_impl(Utc::now());
     }
@@ -120,7 +121,7 @@ impl Stats {
         let before = ip_tracking.len();
         ip_tracking.retain(|_ip_addr, info| now - info.last_seen < IP_TRACKING_TTL);
         let after = ip_tracking.len();
-        info!("Pruned ~{} IP addresses", after as i64 - before as i64);
+        info!(count = after as i64 - before as i64, "Pruned IP addresses");
     }
 
     #[cfg(test)]

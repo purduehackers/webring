@@ -13,10 +13,10 @@ use std::{
 
 use clap::Parser;
 use config::Config;
-use ftail::Ftail;
-use log::info;
 use routes::create_router;
 use sarlacc::num_objects_interned;
+use tracing::{error, info, instrument, warn};
+use tracing_subscriber::prelude::*;
 use webring::Webring;
 
 mod checking;
@@ -36,33 +36,53 @@ struct CliOptions {
 }
 
 #[tokio::main]
+#[instrument]
 async fn main() -> ExitCode {
     // Parse CLI options
     let cli = CliOptions::parse();
 
     // Load config
-    let cfg = match Config::parse_from_file(&cli.config_file).await {
-        Ok(cfg) => Arc::new(cfg),
-        Err(err) => {
-            eprintln!("Failed to read configuration file: {err}");
-            return ExitCode::FAILURE;
-        }
+    let Ok(cfg) = Config::parse_from_file(&cli.config_file)
+        .await
+        .map(Arc::new)
+    else {
+        return ExitCode::FAILURE;
     };
 
     // Set up logging
-    let mut logger = Ftail::new();
-    if stderr().is_terminal() {
-        logger = logger.formatted_console(cfg.logging.verbosity);
+
+    // Create two loggers, only one of which will be used depending on whether
+    // stderr is a terminal. This is needed since they have different types, so they must be
+    // different variables.
+    let (pretty, regular) = if stderr().is_terminal() {
+        (Some(tracing_subscriber::fmt::layer().pretty()), None)
     } else {
-        logger = logger.console(cfg.logging.verbosity);
-    }
-    if let Some(path) = &cfg.logging.log_file {
-        logger = logger.single_file(path, true, cfg.logging.verbosity);
-    }
-    if let Err(err) = logger.init() {
-        eprintln!("Error: failed to initialize logger: {err}");
-        return ExitCode::FAILURE;
-    }
+        (None, Some(tracing_subscriber::fmt::layer()))
+    };
+    // If a log file is set, create a layer that writes to it.
+    let (file_logger, _guard) = if let Some(path) = &cfg.logging.log_file {
+        let (Some(dir), Some(filename)) = (path.parent(), path.file_name()) else {
+            error!("Log file must be a valid file path");
+            return ExitCode::FAILURE;
+        };
+        let file = tracing_appender::rolling::never(dir, filename);
+        let (logger, guard) = tracing_appender::non_blocking(file);
+        (Some(logger), Some(guard))
+    } else {
+        (None, None)
+    };
+    let file_layer = file_logger.map(|logger| {
+        tracing_subscriber::fmt::layer()
+            .with_writer(logger)
+            .with_ansi(false)
+    });
+    // Initialize the tracing subscriber with the appropriate layers and the level filter
+    tracing_subscriber::registry()
+        .with(pretty)
+        .with(regular)
+        .with(file_layer)
+        .with(cfg.logging.verbosity)
+        .init();
 
     // Create webring data structure
     let webring = Arc::new(Webring::new(&cfg));
@@ -85,10 +105,7 @@ async fn main() -> ExitCode {
         let notifier = Arc::clone(notifier);
         tokio::spawn(async move {
             loop {
-                let (sent, failed) = notifier.dispatch_messages().await;
-                if sent > 0 || failed > 0 {
-                    info!("Discord notifications dispatched: {sent} sent, {failed} failed");
-                }
+                notifier.dispatch_messages().await;
                 tokio::time::sleep(DISCORD_NOTIFICATION_INTERVAL).await;
             }
         });
@@ -96,8 +113,8 @@ async fn main() -> ExitCode {
 
     webring.enable_ip_pruning(chrono::Duration::hours(1));
     if let Err(err) = webring.enable_reloading(&cli.config_file) {
-        log::error!("Failed to watch configuration files for changes: {err}");
-        log::warn!("The webring will not be reloaded when files change.");
+        error!(%err, "Failed to watch configuration files for changes");
+        warn!("The webring will not be reloaded when files change.");
     }
 
     tokio::spawn(async {
@@ -113,17 +130,17 @@ async fn main() -> ExitCode {
     match tokio::net::TcpListener::bind(bind_addr).await {
         Ok(listener) => {
             match listener.local_addr() {
-                Ok(addr) => log::info!("Listening on http://{addr}"),
+                Ok(addr) => info!(%addr, "Listening..."),
                 Err(err) => {
-                    log::info!("Listening...");
-                    log::warn!("Failed to get the address we're listening on: {err}");
+                    info!("Listening...");
+                    warn!(%err, "Failed to get the address we're listening on");
                 }
             }
             // Unwrapping this is fine because it will never resolve
             axum::serve(listener, router).await.unwrap();
         }
         Err(err) => {
-            log::error!("Failed to listen on {bind_addr}: {err}");
+            error!(addr = %bind_addr, %err, "Failed to listen");
             return ExitCode::FAILURE;
         }
     }

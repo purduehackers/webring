@@ -23,12 +23,10 @@ axum = { version = "0.8.4", default-features = false, features = [ "http1", "htt
 chrono = { version = "0.4.41", default-features = false, features = [ "serde", "now" ] }
 clap = { version = "4.5.41", features = ["derive"] }
 eyre = "0.6.12"
-ftail = "0.3.0"
 futures = { version = "0.3.31", default-features = false, features = [ "alloc" ] }
 html-escape = { version = "0.2.13", default-features = false }
 indexmap = { version = "2.10.0", default-features = false, features = ["serde"] }
 indoc = "2.0.6"
-log = { version = "0.4.27", features = ["serde"] }
 lol_html = "2.6.0"
 notify = "8.0.0"
 papaya = { version = "0.2.3", features = ["serde"] }
@@ -43,7 +41,10 @@ tera = { version = "1.20.0", default-features = false, features = [ "urlencode" 
 thiserror = { version = "2.0.12", default-features = false }
 tokio = { version = "1.47.0", features = ["macros", "rt-multi-thread"] }
 toml = { version = "0.9.2", default-features = false, features = ["preserve_order", "parse", "serde", "std"] }
-tower-http = { version = "0.6.6", features = ["cors", "fs", "catch-panic"] }
+tower-http = { version = "0.6.6", features = ["cors", "fs", "catch-panic", "trace"] }
+tracing = "0.1.41"
+tracing-appender = "0.2.3"
+tracing-subscriber = { version = "0.3.19", features = ["tracing-log"] }
 
 [dev-dependencies]
 http-body-util = "0.1.3"

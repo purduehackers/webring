@@ -6,7 +6,8 @@ base-url = "https://ring.purduehackers.com"
 listen-addr = "0.0.0.0:3000"
 
 [logging]
-verbosity = "info"
+verbosity = "debug"
+log-file = "webring.log"
 
 [members]
 henry = { url = "hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }

@@ -19,6 +19,7 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tracing::{Instrument, error, info, info_span, instrument, warn};
 
 /// Maximum number of attempts to send a message before giving up.
 const MAX_DELIVERY_ATTEMPTS: usize = 5;
@@ -94,7 +95,7 @@ impl DiscordNotifier {
     fn lock_message_queue(&self) -> MutexGuard<'_, HashMap<Option<Snowflake>, (String, usize)>> {
         // If the lock is poisoned, we clear it and return a new lock.
         self.message_queue.lock().unwrap_or_else(|mut err| {
-            log::error!("Discord notification queue was poisoned; some notifications may be lost");
+            error!("Discord notification queue was poisoned; some notifications may be lost");
             **err.get_mut() = HashMap::new();
             self.message_queue.clear_poison();
             err.into_inner()
@@ -115,6 +116,7 @@ impl DiscordNotifier {
     /// Returns `(n_sent, n_failed)` where `n_sent` is the number of messages that were sent
     /// successfully, and `n_failed` is the number of messages that failed to send. Errors are
     /// logged but not returned.
+    #[instrument(name = "discord.dispatch_messages", skip(self))]
     pub async fn dispatch_messages(&self) -> (usize, usize) {
         // Take the map to avoid race conditions while sending messages.
         let mut map = {
@@ -124,15 +126,24 @@ impl DiscordNotifier {
         let mut sent = 0;
         let mut failed = 0;
         for (ping, (message, attempts)) in map.drain() {
-            if attempts >= MAX_DELIVERY_ATTEMPTS {
-                log::error!(
-                    "Failed to send message to {} after {attempts} attempts; giving up",
-                    ping.map_or("channel".to_string(), |id| id.to_string())
-                );
-                continue;
+            let span = info_span!("discord.dispatch_message", ?ping, prev_attempts = attempts);
+            {
+                let _enter = span.enter();
+                if attempts >= MAX_DELIVERY_ATTEMPTS {
+                    error!(
+                        channel = %ping.map_or("channel".to_string(), |id| id.to_string()),
+                        attempts,
+                        "Failed to send message to channel after several attempts; giving up",
+                    );
+                    continue;
+                }
             }
-            if let Err(err) = self.send_message(ping, &message).await {
-                log::error!("Failed to send Discord message: {err}");
+            let result = self
+                .send_message(ping, &message)
+                .instrument(span.clone())
+                .await;
+            let _enter = span.enter();
+            if result.is_err() {
                 // If no new message was enqueued for the same recipient, retry this one.
                 let mut lock = self.lock_message_queue();
                 if lock.get(&ping).is_none() {
@@ -143,10 +154,14 @@ impl DiscordNotifier {
                 sent += 1;
             }
         }
+        if sent > 0 || failed > 0 {
+            info!(sent, failed, "Discord notifications dispatched");
+        }
         (sent, failed)
     }
 
     /// Send a message in the channel this notifier is registered to.
+    #[instrument(name = "discord.send_message", skip(self, message), err(Display))]
     async fn send_message(&self, ping: Option<Snowflake>, message: &str) -> eyre::Result<()> {
         loop {
             let response = self.send_single_message(ping, message).await?;
@@ -155,6 +170,7 @@ impl DiscordNotifier {
             if response.status() == StatusCode::TOO_MANY_REQUESTS {
                 match response.headers().get(header::RETRY_AFTER) {
                     Some(value) => {
+                        warn!("Retry-After" = ?value, "Hit Discord API rate limit; retrying after delay");
                         sleep_from_retry_after(value).await?;
                         continue;
                     }
