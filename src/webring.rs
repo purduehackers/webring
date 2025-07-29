@@ -20,7 +20,7 @@ use tokio::sync::RwLock as AsyncRwLock;
 use sarlacc::Intern;
 use serde::Deserialize;
 use thiserror::Error;
-use tracing::{debug, error, field::display, info, instrument, warn};
+use tracing::{Instrument, debug, error, field::display, info, info_span, instrument, warn};
 
 use crate::{
     checking::check,
@@ -438,6 +438,7 @@ impl Webring {
     /// called multiple times, only the first call has an effect.
     ///
     /// This function must be called from a tokio runtime.
+    #[instrument(skip(self))]
     pub fn enable_reloading(self: &Arc<Self>, config_file: &Path) -> eyre::Result<()> {
         /// Represents a detected live reload event.
         #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -463,6 +464,7 @@ impl Webring {
         let weak_webring = Arc::downgrade(self);
         let mut watcher = notify::recommended_watcher(
             move |maybe_event: Result<notify::Event, notify::Error>| {
+                let _enter = info_span!("handle file event").entered();
                 match maybe_event {
                     Ok(event) => {
                         for path in &event.paths {
@@ -545,7 +547,7 @@ impl Webring {
                                         webring.invalidate_homepage().await;
                                     }
                                 }
-                            });
+                            }.instrument(info_span!("config reload", file = ?config_file_for_closure)));
                         }
                     }
                     Err(err) => {
