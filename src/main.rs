@@ -15,7 +15,7 @@ use clap::Parser;
 use config::Config;
 use routes::create_router;
 use sarlacc::num_objects_interned;
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, debug_span, error, info, instrument, warn};
 use tracing_subscriber::prelude::*;
 use webring::Webring;
 
@@ -118,8 +118,12 @@ async fn main() -> ExitCode {
     }
 
     tokio::spawn(async {
-        info!("{} objects are interned", num_objects_interned());
-        tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+        loop {
+            debug_span!("monitor interned objects").in_scope(|| {
+                debug!(count = num_objects_interned(), "interned object count");
+            });
+            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+        }
     });
 
     // Start server
