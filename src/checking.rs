@@ -11,6 +11,7 @@ use std::{
         LazyLock, Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use axum::{
@@ -22,7 +23,7 @@ use futures::{Stream, TryStreamExt};
 use reqwest::{Client, Response, StatusCode};
 use sarlacc::Intern;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, instrument, warn};
 
 use crate::{discord::Snowflake, webring::CheckLevel};
 
@@ -43,6 +44,7 @@ static CLIENT: LazyLock<Client> = LazyLock::new(|| {
             env!("CARGO_PKG_VERSION"),
             env!("CARGO_PKG_REPOSITORY")
         ))
+        .timeout(Duration::from_secs(30))
         .build()
         .expect("Creating the HTTP client should not fail")
 });
@@ -143,6 +145,7 @@ pub async fn check(
 ///
 /// If the site fails any check, returns `Some(CheckFailure)`.
 /// If the site passes all checks, returns `None`.
+#[instrument]
 async fn check_impl(
     website: &Uri,
     check_level: CheckLevel,
@@ -152,14 +155,44 @@ async fn check_impl(
         return None;
     }
 
-    let response = match if check_level == CheckLevel::ForLinks {
-        CLIENT.get(website.to_string()).send().await
-    } else {
-        CLIENT.head(website.to_string()).send().await
-    } {
-        Ok(response) => response,
+    let mut response;
+
+    let mut retry_limit = 5;
+
+    loop {
+        response = if check_level == CheckLevel::ForLinks {
+            CLIENT.get(website.to_string()).send().await
+        } else {
+            CLIENT.head(website.to_string()).send().await
+        };
+
+        if retry_limit == 0 {
+            break;
+        }
+
+        match &response {
+            Ok(_) => break,
+            Err(err) => {
+                warn!(
+                    "Could not request website {website} with error {err}. Retrying after five seconds."
+                );
+            }
+        }
+
+        retry_limit -= 1;
+
+        // Don't stall our testcases
+        #[cfg(not(test))]
+        {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    }
+
+    let response = match response {
+        Ok(v) => v,
         Err(err) => return Some(CheckFailure::Connection(err)),
     };
+
     mark_server_as_online().await;
     let successful_response = match response.error_for_status() {
         Ok(r) => r,
@@ -505,7 +538,12 @@ async fn scan_for_links(
 
 #[cfg(test)]
 mod tests {
-    use axum::{Router, body::Bytes, http::Uri, response::Html, routing::get};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use axum::{Router, body::Bytes, extract::State, http::Uri, response::Html, routing::get};
     use futures::stream;
     use indoc::formatdoc;
     use pretty_assertions::assert_eq;
@@ -905,6 +943,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_retrying() {
+        // Start a web server that fails only the first request
+        let server_addr = ("127.0.0.1", 32751);
+        tokio::spawn(async move {
+            let listener = tokio::net::TcpListener::bind(&server_addr).await.unwrap();
+            let router = Router::new()
+                .route(
+                    "/up",
+                    get(async |State(already_requested): State<Arc<AtomicBool>>| {
+                        if already_requested.swap(true, Ordering::Relaxed) {
+                            Ok("Hi there!")
+                        } else {
+                            Err("Retry plz!")
+                        }
+                    }),
+                )
+                .with_state(Arc::new(AtomicBool::new(false)));
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        let base = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
+        assert!(
+            super::check(
+                &Uri::from_static("http://127.0.0.1:32751/up"),
+                CheckLevel::ForLinks,
+                base,
+            )
+            .await
+            .is_ok()
+        );
     }
 
     #[tokio::test]
