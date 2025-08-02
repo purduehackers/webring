@@ -41,6 +41,9 @@ const RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 /// How many times to attempt to retry a connection after failure
 const RETRY_COUNT: usize = 5;
 
+/// How long requests will wait before failing due to timing out
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The HTTP client used to make requests to the webring sites for validation.
 static CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
@@ -50,7 +53,7 @@ static CLIENT: LazyLock<Client> = LazyLock::new(|| {
             env!("CARGO_PKG_VERSION"),
             env!("CARGO_PKG_REPOSITORY")
         ))
-        .timeout(Duration::from_secs(30))
+        .timeout(REQUEST_TIMEOUT)
         .build()
         .expect("Creating the HTTP client should not fail")
 });
@@ -540,17 +543,28 @@ async fn scan_for_links(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicU64, Ordering},
+        },
+        time::Duration,
     };
 
-    use axum::{Router, body::Bytes, extract::State, http::Uri, response::Html, routing::get};
+    use axum::{
+        Router,
+        body::{Body, Bytes},
+        http::Uri,
+        response::{Html, Response},
+        routing::get,
+    };
     use futures::stream;
     use indoc::formatdoc;
     use pretty_assertions::assert_eq;
     use reqwest::StatusCode;
     use sarlacc::Intern;
+
+    use crate::checking::REQUEST_TIMEOUT;
 
     use super::{
         CheckFailure, CheckLevel, LinkStatus, LinkStatuses, WEBRING_CHANNEL, check, scan_for_links,
@@ -951,33 +965,51 @@ mod tests {
     async fn test_retrying() {
         // Start a web server that fails only the first request
         let server_addr = ("127.0.0.1", 32752);
+
+        let ok_hits = Arc::new(AtomicU64::new(0));
+        let err_hits = Arc::new(AtomicU64::new(0));
+        let already_requested = Arc::new(AtomicBool::new(false));
+
+        let ok_hits_for_server = Arc::clone(&ok_hits);
+        let err_hits_for_server = Arc::clone(&err_hits);
         tokio::spawn(async move {
             let listener = tokio::net::TcpListener::bind(&server_addr).await.unwrap();
-            let router = Router::new()
-                .route(
-                    "/up",
-                    get(async |State(already_requested): State<Arc<AtomicBool>>| {
-                        if already_requested.swap(true, Ordering::Relaxed) {
-                            Ok("Hi there!")
-                        } else {
-                            Err("Retry plz!")
-                        }
-                    }),
-                )
-                .with_state(Arc::new(AtomicBool::new(false)));
+            let router = Router::new().route(
+                "/up",
+                get(async move || {
+                    if already_requested.swap(true, Ordering::Relaxed) {
+                        ok_hits_for_server.fetch_add(1, Ordering::Relaxed);
+                        Response::builder()
+                            .status(200)
+                            .body(Body::from("Hi there!"))
+                            .unwrap()
+                    } else {
+                        err_hits_for_server.fetch_add(1, Ordering::Relaxed);
+                        // Trigger the request timeout
+                        tokio::time::sleep(Duration::from_secs(1) + REQUEST_TIMEOUT).await;
+                        Response::builder()
+                            .status(500)
+                            .body(Body::from("Retry plz!"))
+                            .unwrap()
+                    }
+                }),
+            );
             axum::serve(listener, router).await.unwrap();
         });
 
         let base = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
-        assert!(
-            super::check(
-                &Uri::from_static("http://127.0.0.1:32752/up"),
-                CheckLevel::ForLinks,
-                base,
-            )
-            .await
-            .is_ok()
-        );
+
+        let maybe_failure = super::check(
+            &Uri::from_static("http://127.0.0.1:32752/up"),
+            CheckLevel::JustOnline,
+            base,
+        )
+        .await
+        .unwrap();
+
+        assert!(maybe_failure.is_none(), "{maybe_failure:?}");
+        assert_eq!(err_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(ok_hits.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
