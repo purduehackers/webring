@@ -133,7 +133,7 @@ pub async fn check(
                 }
             }
 
-            info!(site = %website, %failure, "site failed a check");
+            info!(site = %website, ?failure, "site failed a check");
             Ok(Some(failure))
         }
     }
