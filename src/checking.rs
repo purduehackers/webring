@@ -23,7 +23,7 @@ use futures::{Stream, TryStreamExt};
 use reqwest::{Client, Response, StatusCode};
 use sarlacc::Intern;
 use tokio::sync::RwLock;
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, instrument};
 
 use crate::{discord::Snowflake, webring::CheckLevel};
 
@@ -33,7 +33,13 @@ use crate::{discord::Snowflake, webring::CheckLevel};
 const WEBRING_CHANNEL: Snowflake = Snowflake::new(1319140464812753009);
 
 /// The time in milliseconds for which the server is considered online after a successful ping.
-static ONLINE_CHECK_TTL_MS: i64 = 1000;
+const ONLINE_CHECK_TTL_MS: i64 = 1000;
+
+/// The timeout to retry requesting a site after failure
+const RETRY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How many times to attempt to retry a connection after failure
+const RETRY_COUNT: usize = 5;
 
 /// The HTTP client used to make requests to the webring sites for validation.
 static CLIENT: LazyLock<Client> = LazyLock::new(|| {
@@ -145,7 +151,7 @@ pub async fn check(
 ///
 /// If the site fails any check, returns `Some(CheckFailure)`.
 /// If the site passes all checks, returns `None`.
-#[instrument]
+#[instrument(skip(base_address))]
 async fn check_impl(
     website: &Uri,
     check_level: CheckLevel,
@@ -157,7 +163,7 @@ async fn check_impl(
 
     let mut response;
 
-    let mut retry_limit = 5;
+    let mut retry_limit = RETRY_COUNT;
 
     loop {
         response = if check_level == CheckLevel::ForLinks {
@@ -173,19 +179,15 @@ async fn check_impl(
         match &response {
             Ok(_) => break,
             Err(err) => {
-                warn!(
-                    "Could not request website {website} with error {err}. Retrying after five seconds."
+                info!(
+                    site = %website, %err, delay = ?RETRY_TIMEOUT, "Error requesting site; retrying after delay"
                 );
             }
         }
 
         retry_limit -= 1;
 
-        // Don't stall our testcases
-        #[cfg(not(test))]
-        {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-        }
+        tokio::time::sleep(RETRY_TIMEOUT).await;
     }
 
     let response = match response {
@@ -864,7 +866,7 @@ mod tests {
         assert_eq!(expected, links.to_message());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn check_failure_types() {
         // Start a web server so we can do each kinds of checks
         let server_addr = ("127.0.0.1", 32750);
@@ -945,10 +947,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_retrying() {
         // Start a web server that fails only the first request
-        let server_addr = ("127.0.0.1", 32751);
+        let server_addr = ("127.0.0.1", 32752);
         tokio::spawn(async move {
             let listener = tokio::net::TcpListener::bind(&server_addr).await.unwrap();
             let router = Router::new()
@@ -969,7 +971,7 @@ mod tests {
         let base = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
         assert!(
             super::check(
-                &Uri::from_static("http://127.0.0.1:32751/up"),
+                &Uri::from_static("http://127.0.0.1:32752/up"),
                 CheckLevel::ForLinks,
                 base,
             )
