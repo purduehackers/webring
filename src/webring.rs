@@ -109,7 +109,11 @@ impl Member {
                 successful.store(false, Ordering::Relaxed);
                 if let (Some(notifier), Some(user_id)) = (notifier, discord_id_for_block) {
                     let message = format!("<@{}> {}", user_id, failure.to_message());
-                    notifier.enqueue_message(Some(user_id), message);
+                    tokio::spawn(async move {
+                        if let Err(err) = notifier.send_message(Some(user_id), &message).await {
+                            error!(%err, "error sending Discord notification");
+                        }
+                    });
                 }
             } else {
                 successful.store(true, Ordering::Relaxed);
@@ -182,12 +186,6 @@ impl Webring {
             base_authority: Intern::from_ref(config.webring.base_url().authority().unwrap()),
             config: Arc::new(AsyncRwLock::new(Some(config.clone()))),
         }
-    }
-
-    /// Returns a reference to this webring's notifier, if it has one.
-    #[must_use]
-    pub fn notifier(&self) -> Option<&Arc<DiscordNotifier>> {
-        self.notifier.as_ref()
     }
 
     /// Update the webring's members in-place and invalidate the cache of the SSR'ed homepage.
