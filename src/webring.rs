@@ -10,12 +10,12 @@ use std::{
 };
 
 use axum::http::{Uri, uri::Authority};
-use chrono::TimeDelta;
+use chrono::{DateTime, TimeDelta, Utc};
 use futures::{StreamExt, future::join, stream::FuturesUnordered};
 use indexmap::IndexMap;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use rand::seq::SliceRandom;
-use tokio::sync::RwLock as AsyncRwLock;
+use tokio::sync::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 
 use sarlacc::Intern;
 use serde::Deserialize;
@@ -67,6 +67,8 @@ struct Member {
     check_level: CheckLevel,
     /// Whether the last check was successful
     check_successful: Arc<AtomicBool>,
+    /// The last time the member was notified of a failure.
+    last_notified: Arc<AsyncMutex<Option<DateTime<Utc>>>>,
 }
 
 impl From<(&str, &MemberSpec)> for Member {
@@ -78,6 +80,7 @@ impl From<(&str, &MemberSpec)> for Member {
             discord_id: spec.discord_id,
             check_level: spec.check_level,
             check_successful: Arc::new(AtomicBool::new(true)),
+            last_notified: Arc::new(AsyncMutex::new(None)),
         }
     }
 }
@@ -99,19 +102,28 @@ impl Member {
 
         let discord_id_for_block = self.discord_id;
         let base_address_for_block = base_address;
+        let last_notified_for_block = Arc::clone(&self.last_notified);
         async move {
             let Ok(check_result) = check(&website, check_level, base_address_for_block).await
             else {
                 return;
             };
 
-            if let Some(failure) = &check_result {
-                successful.store(false, Ordering::Relaxed);
+            if let Some(failure) = check_result {
+                let prev_was_successful = successful.swap(false, Ordering::Relaxed);
                 if let (Some(notifier), Some(user_id)) = (notifier, discord_id_for_block) {
-                    let message = format!("<@{}> {}", user_id, failure.to_message());
+                    // Notifications are enabled. Send notification asynchronously.
                     tokio::spawn(async move {
-                        if let Err(err) = notifier.send_message(Some(user_id), &message).await {
-                            error!(%err, "error sending Discord notification");
+                        // If the last check was successful or the last notification was sent more than
+                        // a day ago, notify the user.
+                        let mut last_notified = last_notified_for_block.lock().await;
+                        let now = Utc::now();
+                        if prev_was_successful
+                            || last_notified.is_none_or(|last| (now - last) > TimeDelta::days(1))
+                        {
+                            let message = format!("<@{}> {}", user_id, failure.to_message());
+                            let _ = notifier.send_message(Some(user_id), &message).await;
+                            *last_notified = Some(now);
                         }
                     });
                 }
@@ -639,7 +651,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use sarlacc::Intern;
     use tempfile::{NamedTempFile, TempDir};
-    use tokio::sync::RwLock as AsyncRwLock;
+    use tokio::sync::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 
     use crate::{
         config::{Config, MemberSpec},
@@ -749,6 +761,7 @@ mod tests {
                     discord_id: Some("123".parse().unwrap()),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
+                    last_notified: Arc::new(AsyncMutex::new(None)),
                 },
             );
             expected.insert(
@@ -760,6 +773,7 @@ mod tests {
                     discord_id: Some("456".parse().unwrap()),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
+                    last_notified: Arc::new(AsyncMutex::new(None)),
                 },
             );
             expected.insert(
@@ -771,6 +785,7 @@ mod tests {
                     discord_id: Some("789".parse().unwrap()),
                     check_level: CheckLevel::JustOnline,
                     check_successful: Arc::new(AtomicBool::new(true)),
+                    last_notified: Arc::new(AsyncMutex::new(None)),
                 },
             );
             expected.insert(
@@ -782,6 +797,7 @@ mod tests {
                     discord_id: None,
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
+                    last_notified: Arc::new(AsyncMutex::new(None)),
                 },
             );
             assert_eq!(*inner, expected);
