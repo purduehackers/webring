@@ -74,7 +74,7 @@ async fn mark_server_as_online() {
     *ping_info = (at, true);
 }
 
-/// Check if the server is online by either getting a cached value (cached for `ONLINE_CHECK_TTL_MS`), or by pinging `8.8.8.8`.
+/// Check if the server is online by either getting a cached value (cached for `ONLINE_CHECK_TTL_MS`), or by requesting our repository.
 async fn is_online() -> bool {
     {
         // Has it been checked within the TTL?
@@ -95,20 +95,12 @@ async fn is_online() -> bool {
     }
 
     // Head-request our repository to make sure we're online.
-    // Pings don't work in GitHub Actions runners, so if we're running tests, just pretend
-    // our ping succeeded.
-    let ping_successful = if cfg!(debug_assertions)
-        && std::env::var("GITHUB_ACTIONS").is_ok_and(|val| val == "true")
-    {
-        true
-    } else {
-        let result = CLIENT
-            .head(env!("CARGO_PKG_REPOSITORY"))
-            .send()
-            .await
-            .and_then(Response::error_for_status);
-        result.is_ok()
-    };
+    let result = CLIENT
+        .head(env!("CARGO_PKG_REPOSITORY"))
+        .send()
+        .await
+        .and_then(Response::error_for_status);
+    let ping_successful = result.is_ok();
 
     // Write the info
     let now = Utc::now().timestamp_millis();
@@ -190,7 +182,9 @@ async fn check_impl(
 
         retry_limit -= 1;
 
-        tokio::time::sleep(RETRY_TIMEOUT).await;
+        if !cfg!(test) {
+            tokio::time::sleep(RETRY_TIMEOUT).await;
+        }
     }
 
     let response = match response {
@@ -880,7 +874,7 @@ mod tests {
         assert_eq!(expected, links.to_message());
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn check_failure_types() {
         // Start a web server so we can do each kinds of checks
         let server_addr = ("127.0.0.1", 32750);
@@ -961,7 +955,7 @@ mod tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn test_retrying() {
         // Start a web server that fails only the first request
         let server_addr = ("127.0.0.1", 32752);
@@ -986,7 +980,14 @@ mod tests {
                     } else {
                         err_hits_for_server.fetch_add(1, Ordering::Relaxed);
                         // Trigger the request timeout
-                        tokio::time::sleep(Duration::from_secs(1) + REQUEST_TIMEOUT).await;
+                        let sleep = tokio::time::sleep(Duration::from_secs(1) + REQUEST_TIMEOUT);
+
+                        // we don't want to wait for realsies
+                        tokio::time::pause();
+                        tokio::time::advance(REQUEST_TIMEOUT - Duration::from_millis(100)).await;
+                        tokio::time::resume();
+
+                        sleep.await;
                         Response::builder()
                             .status(500)
                             .body(Body::from("Retry plz!"))
