@@ -11,6 +11,7 @@ use std::{
         LazyLock, Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use axum::{
@@ -22,7 +23,7 @@ use futures::{Stream, TryStreamExt};
 use reqwest::{Client, Response, StatusCode};
 use sarlacc::Intern;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 use crate::{discord::Snowflake, webring::CheckLevel};
 
@@ -32,7 +33,16 @@ use crate::{discord::Snowflake, webring::CheckLevel};
 const WEBRING_CHANNEL: Snowflake = Snowflake::new(1319140464812753009);
 
 /// The time in milliseconds for which the server is considered online after a successful ping.
-static ONLINE_CHECK_TTL_MS: i64 = 1000;
+const ONLINE_CHECK_TTL_MS: i64 = 1000;
+
+/// The timeout to retry requesting a site after failure
+const RETRY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How many times to attempt to retry a connection after failure
+const RETRY_COUNT: usize = 5;
+
+/// How long requests will wait before failing due to timing out
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The HTTP client used to make requests to the webring sites for validation.
 static CLIENT: LazyLock<Client> = LazyLock::new(|| {
@@ -43,6 +53,7 @@ static CLIENT: LazyLock<Client> = LazyLock::new(|| {
             env!("CARGO_PKG_VERSION"),
             env!("CARGO_PKG_REPOSITORY")
         ))
+        .timeout(REQUEST_TIMEOUT)
         .build()
         .expect("Creating the HTTP client should not fail")
 });
@@ -143,6 +154,7 @@ pub async fn check(
 ///
 /// If the site fails any check, returns `Some(CheckFailure)`.
 /// If the site passes all checks, returns `None`.
+#[instrument(skip(base_address))]
 async fn check_impl(
     website: &Uri,
     check_level: CheckLevel,
@@ -152,14 +164,40 @@ async fn check_impl(
         return None;
     }
 
-    let response = match if check_level == CheckLevel::ForLinks {
-        CLIENT.get(website.to_string()).send().await
-    } else {
-        CLIENT.head(website.to_string()).send().await
-    } {
-        Ok(response) => response,
+    let mut response;
+
+    let mut retry_limit = RETRY_COUNT;
+
+    loop {
+        response = if check_level == CheckLevel::ForLinks {
+            CLIENT.get(website.to_string()).send().await
+        } else {
+            CLIENT.head(website.to_string()).send().await
+        };
+
+        if retry_limit == 0 {
+            break;
+        }
+
+        match &response {
+            Ok(_) => break,
+            Err(err) => {
+                info!(
+                    site = %website, %err, delay = ?RETRY_TIMEOUT, "Error requesting site; retrying after delay"
+                );
+            }
+        }
+
+        retry_limit -= 1;
+
+        tokio::time::sleep(RETRY_TIMEOUT).await;
+    }
+
+    let response = match response {
+        Ok(v) => v,
         Err(err) => return Some(CheckFailure::Connection(err)),
     };
+
     mark_server_as_online().await;
     let successful_response = match response.error_for_status() {
         Ok(r) => r,
@@ -505,12 +543,28 @@ async fn scan_for_links(
 
 #[cfg(test)]
 mod tests {
-    use axum::{Router, body::Bytes, http::Uri, response::Html, routing::get};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicU64, Ordering},
+        },
+        time::Duration,
+    };
+
+    use axum::{
+        Router,
+        body::{Body, Bytes},
+        http::Uri,
+        response::{Html, Response},
+        routing::get,
+    };
     use futures::stream;
     use indoc::formatdoc;
     use pretty_assertions::assert_eq;
     use reqwest::StatusCode;
     use sarlacc::Intern;
+
+    use crate::checking::REQUEST_TIMEOUT;
 
     use super::{
         CheckFailure, CheckLevel, LinkStatus, LinkStatuses, WEBRING_CHANNEL, check, scan_for_links,
@@ -826,7 +880,7 @@ mod tests {
         assert_eq!(expected, links.to_message());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn check_failure_types() {
         // Start a web server so we can do each kinds of checks
         let server_addr = ("127.0.0.1", 32750);
@@ -905,6 +959,57 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_retrying() {
+        // Start a web server that fails only the first request
+        let server_addr = ("127.0.0.1", 32752);
+
+        let ok_hits = Arc::new(AtomicU64::new(0));
+        let err_hits = Arc::new(AtomicU64::new(0));
+        let already_requested = Arc::new(AtomicBool::new(false));
+
+        let ok_hits_for_server = Arc::clone(&ok_hits);
+        let err_hits_for_server = Arc::clone(&err_hits);
+        tokio::spawn(async move {
+            let listener = tokio::net::TcpListener::bind(&server_addr).await.unwrap();
+            let router = Router::new().route(
+                "/up",
+                get(async move || {
+                    if already_requested.swap(true, Ordering::Relaxed) {
+                        ok_hits_for_server.fetch_add(1, Ordering::Relaxed);
+                        Response::builder()
+                            .status(200)
+                            .body(Body::from("Hi there!"))
+                            .unwrap()
+                    } else {
+                        err_hits_for_server.fetch_add(1, Ordering::Relaxed);
+                        // Trigger the request timeout
+                        tokio::time::sleep(Duration::from_secs(1) + REQUEST_TIMEOUT).await;
+                        Response::builder()
+                            .status(500)
+                            .body(Body::from("Retry plz!"))
+                            .unwrap()
+                    }
+                }),
+            );
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        let base = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
+
+        let maybe_failure = super::check(
+            &Uri::from_static("http://127.0.0.1:32752/up"),
+            CheckLevel::JustOnline,
+            base,
+        )
+        .await
+        .unwrap();
+
+        assert!(maybe_failure.is_none(), "{maybe_failure:?}");
+        assert_eq!(err_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(ok_hits.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
