@@ -6,14 +6,14 @@
 
 use std::{fmt::Display, str::FromStr, time::Duration};
 
-use eyre::{Context, bail};
+use eyre::{Context, eyre};
 use reqwest::{
     Client, Response, StatusCode, Url,
     header::{self, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tracing::{instrument, warn};
+use tracing::{error, instrument, warn};
 
 /// A user agent representing our program. [Required by Discord][api-doc-ua].
 ///
@@ -81,26 +81,31 @@ impl DiscordNotifier {
     /// Send a message in the channel this notifier is registered to.
     #[instrument(name = "discord.send_message", skip(self, message), err(Display))]
     pub async fn send_message(&self, ping: Option<Snowflake>, message: &str) -> eyre::Result<()> {
+        let result;
         loop {
             let response = self.send_single_message(ping, message).await?;
             // If we get rate limited, try again.
             // See https://discord.com/developers/docs/topics/rate-limits.
             if response.status() == StatusCode::TOO_MANY_REQUESTS {
-                match response.headers().get(header::RETRY_AFTER) {
-                    Some(value) => {
-                        warn!("Retry-After" = ?value, "Hit Discord API rate limit; retrying after delay");
-                        sleep_from_retry_after(value).await?;
-                        continue;
-                    }
-                    None => bail!("Got rate-limited but response contains no Retry-After header"),
+                if let Some(value) = response.headers().get(header::RETRY_AFTER) {
+                    warn!("Retry-After" = ?value, "Hit Discord API rate limit; retrying after delay");
+                    sleep_from_retry_after(value).await?;
+                    continue;
                 }
+                result = Err(eyre!(
+                    "Got rate-limited but response contains no Retry-After header"
+                ));
+            } else {
+                result = response
+                    .error_for_status()
+                    .wrap_err("Discord webhook returned error");
             }
-            response
-                .error_for_status()
-                .wrap_err("Discord webhook returned error")?;
             break;
         }
-        Ok(())
+        if let Err(err) = &result {
+            error!(%err, "Failed to send Discord message");
+        }
+        result.map(|_| ())
     }
 
     /// Sends a single message to the Discord webhook.
