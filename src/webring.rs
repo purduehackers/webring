@@ -10,12 +10,16 @@ use std::{
 };
 
 use axum::http::{Uri, uri::Authority};
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::TimeDelta;
 use futures::{StreamExt, future::join, stream::FuturesUnordered};
 use indexmap::IndexMap;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use rand::seq::SliceRandom;
-use tokio::sync::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
+use tokio::{
+    sync::{Mutex as AsyncMutex, RwLock as AsyncRwLock},
+    task::JoinHandle,
+    time::Instant,
+};
 
 use sarlacc::Intern;
 use serde::Deserialize;
@@ -25,7 +29,7 @@ use tracing::{Instrument, debug, error, field::display, info, info_span, instrum
 use crate::{
     checking::check,
     config::{Config, MemberSpec},
-    discord::{DiscordNotifier, Snowflake},
+    discord::{DiscordNotifier, NOTIFICATION_DEBOUNCE_PERIOD, Snowflake},
     homepage::{Homepage, MemberForHomepage},
     stats::{Stats, UNKNOWN_ORIGIN},
 };
@@ -68,7 +72,7 @@ struct Member {
     /// Whether the last check was successful
     check_successful: Arc<AtomicBool>,
     /// The last time the member was notified of a failure.
-    last_notified: Arc<AsyncMutex<Option<DateTime<Utc>>>>,
+    last_notified: Arc<AsyncMutex<Option<Instant>>>,
 }
 
 impl From<(&str, &MemberSpec)> for Member {
@@ -88,12 +92,15 @@ impl From<(&str, &MemberSpec)> for Member {
 impl Member {
     /// Checks the member's site, and stores the result. If the check fails and the member has
     /// opted in to notifications, also notifies them of the failure.
+    ///
+    /// Returns a future that resolves to the handle of the spawned task that sends the Discord
+    /// notification, if any. (Mainly intended for testing purposes.)
     #[instrument(name = "webring.check_member", skip_all, fields(site))]
     fn check_and_store_and_optionally_notify(
         &self,
         base_address: Intern<Uri>,
         notifier: Option<Arc<DiscordNotifier>>,
-    ) -> impl Future<Output = ()> + Send + 'static {
+    ) -> impl Future<Output = Option<JoinHandle<()>>> + Send + 'static {
         tracing::Span::current().record("site", display(&self.website));
 
         let website = self.website;
@@ -106,29 +113,35 @@ impl Member {
         async move {
             let Ok(check_result) = check(&website, check_level, base_address_for_block).await
             else {
-                return;
+                return None;
             };
 
+            debug!(site = %website, ?check_result, "got check result for member site");
             if let Some(failure) = check_result {
                 let prev_was_successful = successful.swap(false, Ordering::Relaxed);
                 if let (Some(notifier), Some(user_id)) = (notifier, discord_id_for_block) {
                     // Notifications are enabled. Send notification asynchronously.
-                    tokio::spawn(async move {
+                    Some(tokio::spawn(async move {
                         // If the last check was successful or the last notification was sent more than
                         // a day ago, notify the user.
                         let mut last_notified = last_notified_for_block.lock().await;
-                        let now = Utc::now();
                         if prev_was_successful
-                            || last_notified.is_none_or(|last| (now - last) > TimeDelta::days(1))
+                            || last_notified.is_none_or(|last| {
+                                Instant::now().duration_since(last) > NOTIFICATION_DEBOUNCE_PERIOD
+                            })
                         {
                             let message = format!("<@{}> {}", user_id, failure.to_message());
-                            let _ = notifier.send_message(Some(user_id), &message).await;
-                            *last_notified = Some(now);
+                            if notifier.send_message(Some(user_id), &message).await.is_ok() {
+                                *last_notified = Some(Instant::now());
+                            }
                         }
-                    });
+                    }))
+                } else {
+                    None
                 }
             } else {
                 successful.store(true, Ordering::Relaxed);
+                None
             }
         }
     }
@@ -646,6 +659,7 @@ mod tests {
         routing::get,
     };
     use chrono::Utc;
+    use httpmock::prelude::*;
     use indexmap::IndexMap;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
@@ -655,6 +669,7 @@ mod tests {
 
     use crate::{
         config::{Config, MemberSpec},
+        discord::{DiscordNotifier, NOTIFICATION_DEBOUNCE_PERIOD, Snowflake},
         stats::{TIMEZONE, UNKNOWN_ORIGIN},
         webring::{CheckLevel, Webring},
     };
@@ -1122,5 +1137,142 @@ mod tests {
         assert!(weak_ptr.upgrade().is_none());
         assert_eq!(0, weak_ptr.strong_count());
         assert_eq!(0, weak_ptr.weak_count());
+    }
+
+    /// Test notification sending logic.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn test_notification_debounce() {
+        #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+        enum SiteStatus {
+            Up,
+            Down,
+        }
+        #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+        enum ShouldNotify {
+            Yes,
+            No,
+        }
+        #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+        enum NotifyStatus {
+            Success,
+            Fail,
+        }
+
+        let sequence = &[
+            // site is up; no notification
+            (SiteStatus::Up, ShouldNotify::No, None, None),
+            // site is newly down; should notify
+            (
+                SiteStatus::Down,
+                ShouldNotify::Yes,
+                Some(NotifyStatus::Success),
+                None,
+            ),
+            // site is still down; should not notify
+            (
+                SiteStatus::Down,
+                ShouldNotify::No,
+                None,
+                Some(NOTIFICATION_DEBOUNCE_PERIOD + Duration::from_secs(10)),
+            ),
+            // waited 25 hours; should notify again
+            (
+                SiteStatus::Down,
+                ShouldNotify::Yes,
+                Some(NotifyStatus::Fail),
+                None,
+            ),
+            // last notification failed, so didn't count; should notify again
+            (
+                SiteStatus::Down,
+                ShouldNotify::Yes,
+                Some(NotifyStatus::Success),
+                None,
+            ),
+            // site is still down; should not notify
+            (SiteStatus::Down, ShouldNotify::No, None, None),
+        ];
+
+        let server = MockServer::start();
+
+        let site_url: Uri = server.url("/site").parse().unwrap();
+        let member = Member {
+            name: "bad".to_owned(),
+            website: Intern::new(site_url.clone()),
+            authority: Intern::new(site_url.into_parts().authority.unwrap()),
+            discord_id: Some(Snowflake::new(1234)),
+            check_level: CheckLevel::JustOnline,
+            check_successful: Arc::new(AtomicBool::new(true)),
+            last_notified: Arc::new(AsyncMutex::new(None)),
+        };
+
+        let notifier = Arc::new(DiscordNotifier::new(
+            &server.url("/discord").parse().unwrap(),
+        ));
+        let base_address = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
+
+        for (i, &(site_status, should_notify, notify_status, delay)) in sequence.iter().enumerate()
+        {
+            // Create mock endpoints
+            let mut mock_bad_site = server.mock(|when, then| {
+                when.path("/site");
+                // Respond with the next status in the sequence
+                then.status(match site_status {
+                    SiteStatus::Up => 200,
+                    SiteStatus::Down => 404,
+                });
+            });
+
+            // Mocks the Discord notification endpoint; succeeds/fails based on the sequence.
+            let mut mock_discord_server = server.mock(|when, then| {
+                when.method(POST).path("/discord");
+                then.status(match notify_status {
+                    Some(NotifyStatus::Success) => 204,
+                    Some(NotifyStatus::Fail) => 500,
+                    _ => 404,
+                });
+            });
+
+            // Perform check
+            let maybe_notification_task = member
+                .check_and_store_and_optionally_notify(base_address, Some(Arc::clone(&notifier)))
+                .await;
+            if let Some(notification_task) = maybe_notification_task {
+                // Wait for the notification task to complete
+                notification_task.await.unwrap();
+            }
+            match should_notify {
+                ShouldNotify::No => {
+                    assert_eq!(
+                        mock_discord_server.hits(),
+                        0,
+                        "expected no notification for step {i}"
+                    );
+                }
+                ShouldNotify::Yes => {
+                    assert_eq!(
+                        mock_discord_server.hits(),
+                        1,
+                        "expected notification for step {i}"
+                    );
+                }
+            }
+            // Check stored status
+            assert_eq!(
+                member.check_successful.load(Ordering::Relaxed),
+                site_status == SiteStatus::Up,
+                "check_successful mismatch at step {i}"
+            );
+            if let Some(delay) = delay {
+                tokio::time::pause();
+                tokio::time::advance(delay).await;
+                tokio::time::resume();
+            }
+
+            // Delete mock endpoints
+            mock_bad_site.delete();
+            mock_discord_server.delete();
+        }
     }
 }
