@@ -74,7 +74,7 @@ async fn mark_server_as_online() {
     *ping_info = (at, true);
 }
 
-/// Check if the server is online by either getting a cached value (cached for `ONLINE_CHECK_TTL_MS`), or by pinging `8.8.8.8`.
+/// Check if the server is online by either getting a cached value (cached for `ONLINE_CHECK_TTL_MS`), or by requesting our repository.
 async fn is_online() -> bool {
     {
         // Has it been checked within the TTL?
@@ -94,14 +94,11 @@ async fn is_online() -> bool {
         return ping_info.1;
     }
 
-    // Head-request our repository to make sure we're online.
-    // Pings don't work in GitHub Actions runners, so if we're running tests, just pretend
-    // our ping succeeded.
-    let ping_successful = if cfg!(debug_assertions)
-        && std::env::var("GITHUB_ACTIONS").is_ok_and(|val| val == "true")
-    {
+    let ping_successful = if cfg!(test) {
+        // In testcases where it's possible for time to be paused, the other branch can spuriously return `false` because the timeout could fast-forwarded by the tokio runtime
         true
     } else {
+        // Head-request our repository to make sure we're online.
         let result = CLIENT
             .head(env!("CARGO_PKG_REPOSITORY"))
             .send()
