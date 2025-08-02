@@ -95,7 +95,8 @@ async fn is_online() -> bool {
     }
 
     let ping_successful = if cfg!(test) {
-        // In testcases where it's possible for time to be paused, the other branch can spuriously return `false` because the timeout could fast-forwarded by the tokio runtime
+        // In testcases where it's possible for time to be paused, the other branch can spuriously return `false` because the timeout could fast-forwarded by the tokio runtime.
+        // It would be ideal for us to be able to detect whether time is paused and to temporarily unpause it, but tokio doesn't support that :(
         true
     } else {
         // Head-request our repository to make sure we're online.
