@@ -734,7 +734,7 @@ mod tests {
     }
 
     #[expect(clippy::too_many_lines)]
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn test_webring() {
         let config = make_config();
         let webring = Webring::new(&config);

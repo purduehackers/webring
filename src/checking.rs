@@ -94,19 +94,13 @@ async fn is_online() -> bool {
         return ping_info.1;
     }
 
-    let ping_successful = if cfg!(test) {
-        // In testcases where it's possible for time to be paused, the other branch can spuriously return `false` because the timeout could fast-forwarded by the tokio runtime.
-        // It would be ideal for us to be able to detect whether time is paused and to temporarily unpause it, but tokio doesn't support that :(
-        true
-    } else {
-        // Head-request our repository to make sure we're online.
-        let result = CLIENT
-            .head(env!("CARGO_PKG_REPOSITORY"))
-            .send()
-            .await
-            .and_then(Response::error_for_status);
-        result.is_ok()
-    };
+    // Head-request our repository to make sure we're online.
+    let result = CLIENT
+        .head(env!("CARGO_PKG_REPOSITORY"))
+        .send()
+        .await
+        .and_then(Response::error_for_status);
+    let ping_successful = result.is_ok();
 
     // Write the info
     let now = Utc::now().timestamp_millis();
@@ -188,7 +182,9 @@ async fn check_impl(
 
         retry_limit -= 1;
 
-        tokio::time::sleep(RETRY_TIMEOUT).await;
+        if !cfg!(test) {
+            tokio::time::sleep(RETRY_TIMEOUT).await;
+        }
     }
 
     let response = match response {
@@ -878,7 +874,7 @@ mod tests {
         assert_eq!(expected, links.to_message());
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn check_failure_types() {
         // Start a web server so we can do each kinds of checks
         let server_addr = ("127.0.0.1", 32750);
@@ -959,7 +955,7 @@ mod tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn test_retrying() {
         // Start a web server that fails only the first request
         let server_addr = ("127.0.0.1", 32752);
@@ -984,7 +980,14 @@ mod tests {
                     } else {
                         err_hits_for_server.fetch_add(1, Ordering::Relaxed);
                         // Trigger the request timeout
-                        tokio::time::sleep(Duration::from_secs(1) + REQUEST_TIMEOUT).await;
+                        let sleep = tokio::time::sleep(Duration::from_secs(1) + REQUEST_TIMEOUT);
+
+                        // we don't want to wait for realsies
+                        tokio::time::pause();
+                        tokio::time::advance(REQUEST_TIMEOUT - Duration::from_millis(100)).await;
+                        tokio::time::resume();
+
+                        sleep.await;
                         Response::builder()
                             .status(500)
                             .body(Body::from("Retry plz!"))
