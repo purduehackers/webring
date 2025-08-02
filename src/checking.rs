@@ -18,11 +18,10 @@ use axum::{
     body::Bytes,
     http::{Uri, uri::Scheme},
 };
-use chrono::Utc;
 use futures::{Stream, TryStreamExt};
 use reqwest::{Client, Response, StatusCode};
 use sarlacc::Intern;
-use tokio::sync::RwLock;
+use tokio::{sync::RwLock, time::Instant};
 use tracing::{error, info, instrument};
 
 use crate::{discord::Snowflake, webring::CheckLevel};
@@ -32,8 +31,8 @@ use crate::{discord::Snowflake, webring::CheckLevel};
 #[allow(clippy::unreadable_literal)]
 const WEBRING_CHANNEL: Snowflake = Snowflake::new(1319140464812753009);
 
-/// The time in milliseconds for which the server is considered online after a successful ping.
-const ONLINE_CHECK_TTL_MS: i64 = 1000;
+/// The time for which the server is considered online after a successful ping.
+const ONLINE_CHECK_TTL: Duration = Duration::from_secs(1);
 
 /// The timeout to retry requesting a site after failure
 const RETRY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -59,28 +58,32 @@ static CLIENT: LazyLock<Client> = LazyLock::new(|| {
 });
 
 /// (Last pinged, Was ping successful) — Used to check if the server is online
-static PING_INFO: RwLock<(i64, bool)> = RwLock::const_new((i64::MIN, false));
+static PING_INFO: RwLock<(Option<Instant>, bool)> = RwLock::const_new((None, false));
 
 /// If a request succeeds, then call this function to mark the server as definitely online.
 async fn mark_server_as_online() {
-    let at = Utc::now().timestamp_millis();
+    let at = Instant::now();
     let mut ping_info = PING_INFO.write().await;
-    let now = Utc::now().timestamp_millis();
+    let now = Instant::now();
 
-    if at + ONLINE_CHECK_TTL_MS < now || ping_info.0 > at {
+    if at + ONLINE_CHECK_TTL < now || ping_info.0.is_some_and(|ping| ping > at) {
         return;
     }
 
-    *ping_info = (at, true);
+    *ping_info = (Some(at), true);
 }
 
-/// Check if the server is online by either getting a cached value (cached for `ONLINE_CHECK_TTL_MS`), or by requesting our repository.
+/// Check if the server is online by either getting a cached value (cached for
+/// [`ONLINE_CHECK_TTL`]), or by making a `HEAD` request to the repository URL.
 async fn is_online() -> bool {
     {
         // Has it been checked within the TTL?
         let ping_info = PING_INFO.read().await;
-        let now = Utc::now().timestamp_millis();
-        if now < ping_info.0 + ONLINE_CHECK_TTL_MS {
+        let now = Instant::now();
+        if ping_info
+            .0
+            .is_some_and(|ping| now < ping + ONLINE_CHECK_TTL)
+        {
             return ping_info.1;
         }
     }
@@ -89,22 +92,25 @@ async fn is_online() -> bool {
     let mut ping_info = PING_INFO.write().await;
 
     // What if another thread did the ping while we were waiting for the write lock? If so, return it.
-    let now = Utc::now().timestamp_millis();
-    if now < ping_info.0 + ONLINE_CHECK_TTL_MS {
+    let now = Instant::now();
+    if ping_info
+        .0
+        .is_some_and(|ping| now < ping + ONLINE_CHECK_TTL)
+    {
         return ping_info.1;
     }
 
     // Head-request our repository to make sure we're online.
-    let result = CLIENT
+    let ping_successful = CLIENT
         .head(env!("CARGO_PKG_REPOSITORY"))
         .send()
         .await
-        .and_then(Response::error_for_status);
-    let ping_successful = result.is_ok();
+        .and_then(Response::error_for_status)
+        .is_ok();
 
     // Write the info
-    let now = Utc::now().timestamp_millis();
-    *ping_info = (now, ping_successful);
+    let now = Instant::now();
+    *ping_info = (Some(now), ping_successful);
 
     ping_successful
 }
