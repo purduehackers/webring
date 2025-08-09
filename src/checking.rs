@@ -119,7 +119,7 @@ pub async fn check(
     check_level: CheckLevel,
     base_address: Intern<Uri>,
 ) -> Result<Option<CheckFailure>, ()> {
-    match check_impl(website, check_level, base_address).await {
+    match check_with_retry(website, check_level, base_address).await {
         None => Ok(None),
         Some(failure) => {
             // If the issue is not a connection issue, or if it is a connection issue and the
@@ -142,6 +142,46 @@ pub async fn check(
     }
 }
 
+/// Call `check_impl` but it retries `RETRY_COUNT` times with `RETRY_TIMEOUT` delay if the error returned should be retried.
+async fn check_with_retry(
+    website: &Uri,
+    check_level: CheckLevel,
+    base_address: Intern<Uri>,
+) -> Option<CheckFailure> {
+    let mut response;
+
+    let mut retry_limit = RETRY_COUNT;
+
+    loop {
+        response = check_impl(website, check_level, base_address).await;
+
+        if retry_limit == 0 {
+            break;
+        }
+
+        match &response {
+            None => break,
+            Some(err) => {
+                if !err.should_be_retried() {
+                    break;
+                }
+
+                info!(
+                    site = %website, %err, delay = ?RETRY_TIMEOUT, "Error requesting site; retrying after delay"
+                );
+            }
+        }
+
+        retry_limit -= 1;
+
+        if !cfg!(test) {
+            tokio::time::sleep(RETRY_TIMEOUT).await;
+        }
+    }
+
+    response
+}
+
 /// Perform the actual check for the given website and check level.
 ///
 /// If the site fails any check, returns `Some(CheckFailure)`.
@@ -156,38 +196,11 @@ async fn check_impl(
         return None;
     }
 
-    let mut response;
-
-    let mut retry_limit = RETRY_COUNT;
-
-    loop {
-        response = if check_level == CheckLevel::ForLinks {
-            CLIENT.get(website.to_string()).send().await
-        } else {
-            CLIENT.head(website.to_string()).send().await
-        };
-
-        if retry_limit == 0 {
-            break;
-        }
-
-        match &response {
-            Ok(_) => break,
-            Err(err) => {
-                info!(
-                    site = %website, %err, delay = ?RETRY_TIMEOUT, "Error requesting site; retrying after delay"
-                );
-            }
-        }
-
-        retry_limit -= 1;
-
-        if !cfg!(test) {
-            tokio::time::sleep(RETRY_TIMEOUT).await;
-        }
-    }
-
-    let response = match response {
+    let response = match if check_level == CheckLevel::ForLinks {
+        CLIENT.get(website.to_string()).send().await
+    } else {
+        CLIENT.head(website.to_string()).send().await
+    } {
         Ok(v) => v,
         Err(err) => return Some(CheckFailure::Connection(err)),
     };
@@ -248,6 +261,16 @@ impl CheckFailure {
             CheckFailure::ParsingError(err) => {
                 format!("There was an error parsing your HTML document: {err}")
             }
+        }
+    }
+
+    /// Tell whether the error could be sporadic and the check should be retried
+    fn should_be_retried(&self) -> bool {
+        match self {
+            CheckFailure::IOError(_)
+            | CheckFailure::ResponseStatus(_)
+            | CheckFailure::Connection(_) => true,
+            CheckFailure::ParsingError(_) | CheckFailure::LinkIssues(_) => false,
         }
     }
 }
@@ -540,7 +563,7 @@ mod tests {
     use std::{
         sync::{
             Arc,
-            atomic::{AtomicBool, AtomicU64, Ordering},
+            atomic::{AtomicU64, Ordering},
         },
         time::Duration,
     };
@@ -552,7 +575,7 @@ mod tests {
         response::{Html, Response},
         routing::get,
     };
-    use futures::stream;
+    use futures::stream::{self, iter};
     use indoc::formatdoc;
     use pretty_assertions::assert_eq;
     use reqwest::StatusCode;
@@ -957,28 +980,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_retrying() {
-        // Start a web server that fails only the first request
+        // Start a web server that
+        // - Times out the first request
+        // - 500 errors for the second request
+        // - Succeeds and returns part of the body but fails partway through for the third request
+        // - Succeeds the fourth request
+
         let server_addr = ("127.0.0.1", 32752);
+        let body = "<a href=\"https://ring.purduehackers.com/prev\"></a><a href=\"https://ring.purduehackers.com\"></a><a href=\"https://ring.purduehackers.com/next\"></a>";
 
-        let ok_hits = Arc::new(AtomicU64::new(0));
-        let err_hits = Arc::new(AtomicU64::new(0));
-        let already_requested = Arc::new(AtomicBool::new(false));
+        let amt_requested = Arc::new(AtomicU64::new(0));
 
-        let ok_hits_for_server = Arc::clone(&ok_hits);
-        let err_hits_for_server = Arc::clone(&err_hits);
+        let amt_req_for_thread = Arc::clone(&amt_requested);
         tokio::spawn(async move {
             let listener = tokio::net::TcpListener::bind(&server_addr).await.unwrap();
             let router = Router::new().route(
                 "/up",
                 get(async move || {
-                    if already_requested.swap(true, Ordering::Relaxed) {
-                        ok_hits_for_server.fetch_add(1, Ordering::Relaxed);
-                        Response::builder()
-                            .status(200)
-                            .body(Body::from("Hi there!"))
-                            .unwrap()
-                    } else {
-                        err_hits_for_server.fetch_add(1, Ordering::Relaxed);
+                    let which_req = amt_req_for_thread.fetch_add(1, Ordering::Relaxed);
+                    if which_req == 0 {
                         // Trigger the request timeout
                         let sleep = tokio::time::sleep(Duration::from_secs(1) + REQUEST_TIMEOUT);
 
@@ -989,8 +1009,25 @@ mod tests {
 
                         sleep.await;
                         Response::builder()
+                            .status(200)
+                            .body(Body::from("Retry plz!"))
+                            .unwrap()
+                    } else if which_req == 1 {
+                        Response::builder()
                             .status(500)
                             .body(Body::from("Retry plz!"))
+                            .unwrap()
+                    } else if which_req == 2 {
+                        Response::builder()
+                            .status(200)
+                            .body(Body::from_stream(iter(
+                                [Ok(&body[0..50]), Err("Oh noes!")].into_iter(),
+                            )))
+                            .unwrap()
+                    } else {
+                        Response::builder()
+                            .status(200)
+                            .body(Body::from(body))
                             .unwrap()
                     }
                 }),
@@ -1002,15 +1039,14 @@ mod tests {
 
         let maybe_failure = super::check(
             &Uri::from_static("http://127.0.0.1:32752/up"),
-            CheckLevel::JustOnline,
+            CheckLevel::ForLinks,
             base,
         )
         .await
         .unwrap();
 
         assert!(maybe_failure.is_none(), "{maybe_failure:?}");
-        assert_eq!(err_hits.load(Ordering::Relaxed), 1);
-        assert_eq!(ok_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(amt_requested.load(Ordering::Relaxed), 4);
     }
 
     #[tokio::test]
