@@ -30,12 +30,12 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+        run: rustup install --profile minimal --component clippy
 
       - name: Cache build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Lint Rust code
         run: cargo clippy --all-targets --workspace --locked
@@ -74,12 +74,12 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+        run: rustup install --profile minimal --component rustfmt
 
       - name: Cache build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Check formatting
         run: cargo fmt --check --all
@@ -87,18 +87,75 @@ jobs:
   test:
     name: Run tests
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      pull-requests: write
+      contents: read
     steps:
       - name: Check out sources
         uses: actions/checkout@v5
 
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup install --profile minimal --component llvm-tools
 
       - name: Cache build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
-      - name: Run default tests
-        run: cargo test --workspace --all-targets --no-fail-fast --locked
+      - name: Install nextest (if not cached)
+        run: cargo nextest --version || cargo install --locked cargo-nextest
+
+      - name: Install llvm-cov (if not cached)
+        run: cargo llvm-cov --version || cargo install --locked cargo-llvm-cov
+
+      - name: Run tests
+        run: >-
+          cargo llvm-cov nextest
+          --no-report
+          --no-fail-fast
+          --locked
+          --workspace
+          --all-targets
+          --all-features
+          --profile ci
+
+      - name: Generate coverage reports
+        if: ${{ !cancelled() }} # Generate reports even if tests failed
+        shell: bash
+        run: |
+          cargo llvm-cov report --html
+          cargo llvm-cov report --codecov --output-path target/llvm-cov/codecov.json
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: ${{ !cancelled() }} # Upload reports even if tests failed
+        with:
+          check_run: false
+          comment_mode: ${{ (github.event_name == 'pull_request') && 'always' || 'off' }}
+          files: |
+            target/nextest/ci/junit.xml
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }} # Upload reports even if tests failed
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: target/nextest/ci/junit.xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        if: ${{ !cancelled() }} # Upload reports even if tests failed
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/llvm-cov/codecov.json
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }} # Upload reports even if tests failed
+        with:
+          name: coverage-html
+          path: target/llvm-cov/html/
 
   # Adding this because we don't want to run the whole build workflow on each
   # push
@@ -110,10 +167,12 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup install --profile minimal
 
       - name: Cache build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Compile project
         run: cargo build --workspace --all-targets --release --locked
