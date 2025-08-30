@@ -52,6 +52,11 @@
             property="og:locale"
             content="en_US"
         />
+
+        <script
+            defer
+            src="/static/index.js"
+        ></script>
     </head>
 
     <body>
@@ -147,6 +152,18 @@
                             {% endfor -%}
                         </tbody>
                     </table>
+                </div>
+
+                <div id="fun-selector">
+                    <form action="#">
+                        <label for="flip">Backwards mode</label>
+                        <input
+                            type="checkbox"
+                            id="flip"
+                            name="flip"
+                            onchange="setFlip(this.checked)"
+                        />
+                    </form>
                 </div>
             </section>
         </main>
