@@ -19,6 +19,7 @@ use axum::{
     response::{Html, IntoResponse, NoContent, Response},
     routing::get,
 };
+use serde::{Deserialize, Serialize};
 use tera::Tera;
 use tower_http::{
     catch_panic::{CatchPanicLayer, ResponseForPanic},
@@ -32,6 +33,9 @@ use crate::webring::{TraverseWebringError, Webring};
 
 /// Static HTML template for rendering error responses.
 static ERROR_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_error_template);
+
+/// Static HTML template for rendering the /flip page.
+static FLIP_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_flip_template);
 
 /// Creates a [`Router`] with the routes for our application.
 pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
@@ -55,6 +59,7 @@ pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
         .route("/prev", get(serve_previous))
         .route("/previous", get(serve_previous))
         .route("/random", get(serve_random))
+        .route("/flip", get(serve_flip))
         .fallback_service(HandlerWithoutStateExt::into_service(
             async |request: Request| -> RouteError {
                 RouteError::NoRoute(request.uri().to_owned())
@@ -223,6 +228,30 @@ async fn serve_random(
         )],
         redirect_with_content(&page),
     ))
+}
+
+/// Query parameters for the `/flip` endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FlipParams {
+    /// The URL to embed flipped.
+    url: String,
+}
+
+/// Serve the `/flip` endpoint.
+async fn serve_flip(Query(params): Query<FlipParams>) -> Html<String> {
+    let ctx = tera::Context::from_serialize(&params).unwrap();
+    Html(FLIP_TEMPLATE.render("flip.html", &ctx).unwrap())
+}
+
+/// Creates a Tera template for rendering the /flip page's HTML.
+///
+/// The template is baked into the binary at compile time using `include_str!`, so it is guaranteed
+/// to be correct and renderable.
+fn create_flip_template() -> Tera {
+    let html_src = include_str!("templates/flip.html");
+    let mut tera = Tera::default();
+    tera.add_raw_template("flip.html", html_src).unwrap();
+    tera
 }
 
 /// Get a URI representing the origin of the request.
@@ -738,5 +767,29 @@ mod tests {
             );
             assert_ne!(res.headers().get(header::CONTENT_LENGTH).unwrap(), "0");
         }
+    }
+
+    #[tokio::test]
+    async fn flip() {
+        let (router, _webring, _tmpfiles) = app().await;
+
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/flip?url=https://arhan.sh")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get("content-type").unwrap(),
+            "text/html; charset=utf-8"
+        );
+        let text = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec())
+            .unwrap();
+        assert!(text.contains("src=\"https:&#x2F;&#x2F;arhan.sh\""));
     }
 }
