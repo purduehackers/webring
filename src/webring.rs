@@ -20,6 +20,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 //! Ring behavior and data structures
 
 use std::{
+    io::{Empty, empty},
     net::IpAddr,
     path::{Path, PathBuf},
     sync::{
@@ -213,7 +214,7 @@ pub struct Webring {
     /// Discord notifier for notifying members of issues with their sites
     notifier: Option<Arc<DiscordNotifier>>,
     /// Statistics collected about the ring
-    stats: Arc<Stats>,
+    stats: Arc<Stats<Empty>>,
     /// Current configuration of the webring, used for detecting changes when reloading
     config: Arc<AsyncRwLock<Option<Config>>>,
 }
@@ -228,7 +229,7 @@ impl Webring {
             members: RwLock::new(member_map_from_config_table(&config.members)),
             static_dir_path: config.webring.static_dir.clone(),
             homepage: AsyncRwLock::new(None),
-            stats: Arc::new(Stats::new(Utc::now())),
+            stats: Arc::new(Stats::new(Utc::now(), empty())),
             file_watcher: OnceLock::default(),
             base_address: config.webring.base_url(),
             notifier: config
@@ -673,7 +674,7 @@ mod tests {
     use std::{
         collections::HashSet,
         fs::{File, OpenOptions},
-        io::Write as _,
+        io::{Write as _, empty},
         path::PathBuf,
         sync::{
             Arc, OnceLock, RwLock,
@@ -716,7 +717,7 @@ mod tests {
                 base_address: Intern::default(),
                 base_authority: Intern::new("ring.purduehackers.com".parse().unwrap()),
                 notifier: None,
-                stats: Arc::new(Stats::new(Utc::now())),
+                stats: Arc::new(Stats::new(Utc::now(), empty())),
                 config: Arc::new(AsyncRwLock::new(None)),
             }
         }

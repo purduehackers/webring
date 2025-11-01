@@ -23,10 +23,12 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
+use core::fmt::Debug;
 use std::{
+    io::Write,
     net::IpAddr,
     sync::{
-        LazyLock,
+        Arc, LazyLock, Mutex,
         atomic::{AtomicI32, AtomicPtr, AtomicU64, Ordering},
     },
 };
@@ -36,7 +38,7 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 use papaya::{Guard, HashMap};
 use sarlacc::Intern;
 use seize::Collector;
-use tracing::{info, instrument};
+use tracing::{error, info, instrument};
 
 /// The TTL for IP tracking entries, after which they are considered stale and removed.
 const IP_TRACKING_TTL: chrono::TimeDelta = Duration::days(1);
@@ -59,32 +61,42 @@ struct IpInfo {
 type Counts = HashMap<(Intern<Authority>, Intern<Authority>, Intern<Authority>), AtomicU64>;
 
 /// The counts for all of the possible webring redirects
-#[derive(Debug)]
-struct AggregatedStats {
+struct AggregatedStats<W: Write + Send + 'static> {
     /// The collector for the atomic data that we're handling
-    collector: Collector,
+    collector: Arc<Collector>,
     /// The last date that a redirect was tracked (hopefully today)
     today: AtomicI32,
     /// (From, To, Started From) → Count
     /// Invariant: This MUST ALWAYS be a valid pointer
     counter: AtomicPtr<Counts>,
+    /// The writer for the statistics output file
+    output: Arc<Mutex<W>>,
 }
 
-impl AggregatedStats {
+impl<W: Write + Send + 'static> Debug for AggregatedStats<W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AggregatedStats")
+            .field("today", &self.today.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
+/// Convert the current time into the days since the epoch
+fn mk_num(time: DateTime<Utc>) -> i32 {
+    time.date_naive().to_epoch_days()
+}
+
+impl<W: Write + Send + 'static> AggregatedStats<W> {
     /// Create a new `AggregatedStats`
-    fn new(now: DateTime<Utc>) -> Self {
+    fn new(now: DateTime<Utc>, writer: W) -> Self {
         let counter: Counts = HashMap::default();
 
         AggregatedStats {
-            today: AtomicI32::new(Self::mk_num(now)),
+            today: AtomicI32::new(mk_num(now)),
             counter: AtomicPtr::new(Box::into_raw(Box::new(counter))),
-            collector: Collector::new(),
+            collector: Arc::new(Collector::new()),
+            output: Arc::new(Mutex::new(writer)),
         }
-    }
-
-    /// Convert the current time into the days since the epoch
-    fn mk_num(time: DateTime<Utc>) -> i32 {
-        time.date_naive().to_epoch_days()
     }
 
     /// Retrieve the current counter from a guard
@@ -95,20 +107,45 @@ impl AggregatedStats {
 
     /// Retrieve the current counter from a guard while updating it if the current time is a new calendar date
     fn maybe_update_counter<'a>(&'a self, now: DateTime<Utc>, guard: &'a impl Guard) -> &'a Counts {
-        let now = AggregatedStats::mk_num(now);
+        let now = mk_num(now);
 
         let prev_day = self.today.swap(now, Ordering::Relaxed);
 
         if prev_day != now {
             let new_counter: *mut Counts = Box::into_raw(Box::new(HashMap::new()));
 
-            // Release to synchronize-with `counter`. We don't need Acquire because we won't read the previous pointer.
-            let prev = guard.swap(&self.counter, new_counter, Ordering::Release);
-            // SAFETY: The pointer can no longer be accessed now that it has been swapped into `prev`, and `Box::from_raw` is the correct way to drop the pointer.
-            unsafe {
-                self.collector
-                    .retire(prev, |ptr, _| drop(Box::from_raw(ptr)));
-            }
+            // We need this guard to go into our task so it needs to be owned
+            let guard_owned = self.collector.enter();
+
+            // Release to synchronize-with `counter` and Acquire to ensure that we can see the initialization of the previous one so that we can properly access and write it.
+            let prev_ptr = guard_owned.swap(&self.counter, new_counter, Ordering::AcqRel);
+
+            let output = Arc::clone(&self.output);
+
+            // Allow it to be moved to our task
+            let prev_ptr = prev_ptr as usize;
+
+            let this_collector = Arc::clone(&self.collector);
+
+            tokio::task::spawn_blocking(move || {
+                let mut output = output.lock().unwrap();
+
+                let prev_ptr = prev_ptr as *mut Counts;
+                // SAFETY: Since this pointer hasn't been retired yet, we have access to it until we do retire it.
+                let prev = unsafe { &*prev_ptr }.pin();
+
+                for ((from, to, started_from), count) in &prev {
+                    let count = count.load(Ordering::Relaxed);
+                    if let Err(e) = output.write_fmt(format_args!(
+                        "{prev_day},{from},{to},{started_from},{count}\n"
+                    )) {
+                        error!("Error writing statistics: {e}");
+                    }
+                }
+
+                // SAFETY: The pointer can no longer be accessed from a new location since we previously overwrote the atomic pointer, and `Box::from_raw` is the correct way to drop the pointer. This task is also finished with its access to it.
+                unsafe { this_collector.retire(prev_ptr, |ptr, _| drop(Box::from_raw(ptr))) }
+            });
         }
 
         self.counter(guard)
@@ -116,19 +153,27 @@ impl AggregatedStats {
 }
 
 /// Statistics tracking for the webring
-#[derive(Debug)]
-pub struct Stats {
+pub struct Stats<W: Write + Send + 'static> {
     /// Aggregated statistics
-    aggregated: AggregatedStats,
+    aggregated: AggregatedStats<W>,
     /// Map of IP information keyed by IP address
     ip_tracking: HashMap<IpAddr, IpInfo>,
 }
 
-impl Stats {
+impl<W: Write + Send + 'static> Debug for Stats<W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Stats")
+            .field("aggregated", &self.aggregated)
+            .field("ip_tracking", &self.ip_tracking)
+            .finish()
+    }
+}
+
+impl<W: Write + Send> Stats<W> {
     /// Creates a new instance of `Stats`.
-    pub fn new(now: DateTime<Utc>) -> Stats {
+    pub fn new(now: DateTime<Utc>, writer: W) -> Stats<W> {
         Stats {
-            aggregated: AggregatedStats::new(now),
+            aggregated: AggregatedStats::new(now, writer),
             ip_tracking: HashMap::new(),
         }
     }
@@ -208,11 +253,13 @@ impl Stats {
 
 #[cfg(test)]
 mod tests {
-    use std::net::IpAddr;
+    use std::{collections::HashSet, net::IpAddr, str::from_utf8};
 
     use axum::http::uri::Authority;
     use chrono::{DateTime, Duration, NaiveDate, Utc};
+    use indoc::indoc;
     use sarlacc::Intern;
+    use tokio::sync::mpsc::{self, UnboundedReceiver};
 
     use crate::stats::IP_TRACKING_TTL;
 
@@ -234,9 +281,37 @@ mod tests {
         t(timestamp).with_timezone(&TIMEZONE).date_naive()
     }
 
+    struct TestWriter(mpsc::UnboundedSender<Vec<u8>>);
+
+    impl std::io::Write for TestWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.send(buf.to_owned()).unwrap();
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    async fn assert_same_data(rx: &mut UnboundedReceiver<Vec<u8>>, expected: &str) {
+        let mut data = Vec::new();
+        while data.len() != expected.len() {
+            data.extend(rx.recv().await.unwrap());
+        }
+        assert_eq!(
+            from_utf8(&data)
+                .unwrap()
+                .split('\n')
+                .collect::<HashSet<_>>(),
+            expected.split('\n').collect::<HashSet<_>>()
+        );
+    }
+
     #[tokio::test]
     async fn test_stat_tracking() {
-        let stats = Stats::new(t(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let stats = Stats::new(t(0), TestWriter(tx));
 
         stats.redirected_impl(a("0.0.0.0"), i("a.com"), i("b.com"), t(0));
         stats.redirected_impl(a("0.0.0.0"), i("b.com"), i("c.com"), t(1));
@@ -285,7 +360,18 @@ mod tests {
 
         let day = Duration::days(1);
 
+        assert!(rx.is_empty());
         stats.redirected_impl(a("0.0.0.0"), i("b.com"), i("c.com"), t(1) + day);
+        assert_same_data(
+            &mut rx,
+            indoc! {"
+            0,a.com,b.com,a.com,2
+            0,b.com,c.com,a.com,1
+            0,b.com,homepage.com,a.com,1
+            0,homepage.com,c.com,a.com,1
+        "},
+        )
+        .await;
         stats.redirected_impl(a("0.0.0.0"), i("c.com"), i("a.com"), t(2) + day);
 
         assert_eq!(stats.aggregated.counter(&guard).len(), 2);
