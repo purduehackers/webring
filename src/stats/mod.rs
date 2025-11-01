@@ -109,9 +109,23 @@ impl<W: Write + Send + 'static> AggregatedStats<W> {
     fn maybe_update_counter<'a>(&'a self, now: DateTime<Utc>, guard: &'a impl Guard) -> &'a Counts {
         let now = mk_num(now);
 
-        let prev_day = self.today.swap(now, Ordering::Relaxed);
+        let mut prev_day = self.today.load(Ordering::Relaxed);
 
-        if prev_day != now {
+        // If our "now" time is in the past (perhaps tasks got out of order or something), we want to count this redirect towards the most recent day rather than getting rid of the newest day and replacing it with data intended for the oldest day.
+
+        while prev_day < now {
+            match self
+                .today
+                .compare_exchange(prev_day, now, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => break,
+                Err(new_prev_day) => {
+                    prev_day = new_prev_day;
+                }
+            }
+        }
+
+        if prev_day < now {
             let new_counter: *mut Counts = Box::into_raw(Box::new(HashMap::new()));
 
             // We need this guard to go into our task so it needs to be owned
@@ -372,10 +386,24 @@ mod tests {
         "},
         )
         .await;
+        stats.redirected_impl(a("0.0.0.0"), i("b.com"), i("c.com"), t(4));
         stats.redirected_impl(a("0.0.0.0"), i("c.com"), i("a.com"), t(2) + day);
 
         assert_eq!(stats.aggregated.counter(&guard).len(), 2);
-        stats.assert_stat_entry(("b.com", "c.com", "b.com"), 1);
+        stats.assert_stat_entry(("b.com", "c.com", "b.com"), 2);
+        stats.assert_stat_entry(("c.com", "a.com", "b.com"), 1);
+
+        stats.redirected_impl(a("0.0.0.0"), i("c.com"), i("a.com"), t(2) + day + day);
+        assert_same_data(
+            &mut rx,
+            indoc! {"
+            1,b.com,c.com,b.com,2
+            1,c.com,a.com,b.com,1
+        "},
+        )
+        .await;
+
+        assert_eq!(stats.aggregated.counter(&guard).len(), 1);
         stats.assert_stat_entry(("c.com", "a.com", "b.com"), 1);
     }
 }
