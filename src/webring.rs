@@ -71,8 +71,11 @@ struct Member {
     check_level: CheckLevel,
     /// Whether the last check was successful
     check_successful: Arc<AtomicBool>,
-    /// The last time the member was notified of a failure.
-    last_notified: Arc<AsyncMutex<Option<Instant>>>,
+    /// The last time the member was notified and pinged about a failure.
+    ///
+    /// This does not count silent notifications, e.g. messages which are sent
+    /// but do not trigger a Discord notification.
+    last_pinged: Arc<AsyncMutex<Option<Instant>>>,
 }
 
 impl From<(&str, &MemberSpec)> for Member {
@@ -84,7 +87,7 @@ impl From<(&str, &MemberSpec)> for Member {
             discord_id: spec.discord_id,
             check_level: spec.check_level,
             check_successful: Arc::new(AtomicBool::new(true)),
-            last_notified: Arc::new(AsyncMutex::new(None)),
+            last_pinged: Arc::new(AsyncMutex::new(None)),
         }
     }
 }
@@ -109,7 +112,7 @@ impl Member {
 
         let discord_id_for_block = self.discord_id;
         let base_address_for_block = base_address;
-        let last_notified_for_block = Arc::clone(&self.last_notified);
+        let last_pinged_for_block = Arc::clone(&self.last_pinged);
         async move {
             let Ok(check_result) = check(&website, check_level, base_address_for_block).await
             else {
@@ -124,15 +127,22 @@ impl Member {
                     Some(tokio::spawn(async move {
                         // If the last check was successful or the last notification was sent more than
                         // a day ago, notify the user.
-                        let mut last_notified = last_notified_for_block.lock().await;
-                        if prev_was_successful
-                            || last_notified.is_none_or(|last| {
-                                Instant::now().duration_since(last) > NOTIFICATION_DEBOUNCE_PERIOD
-                            })
-                        {
+                        let mut last_pinged = last_pinged_for_block.lock().await;
+                        let past_debounce_period = last_pinged.is_none_or(|last| {
+                            Instant::now().duration_since(last) > NOTIFICATION_DEBOUNCE_PERIOD
+                        });
+                        if prev_was_successful || past_debounce_period {
+                            // If the last non-silent notification was within
+                            // the debounce period, make this one silent.
+                            let silent = !past_debounce_period;
                             let message = format!("<@{}> {}", user_id, failure.to_message());
-                            if notifier.send_message(Some(user_id), &message).await.is_ok() {
-                                *last_notified = Some(Instant::now());
+                            if notifier
+                                .send_message(user_id, &message, silent)
+                                .await
+                                .is_ok()
+                                && !silent
+                            {
+                                *last_pinged = Some(Instant::now());
                             }
                         }
                     }))
@@ -776,7 +786,7 @@ mod tests {
                     discord_id: Some("123".parse().unwrap()),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
-                    last_notified: Arc::new(AsyncMutex::new(None)),
+                    last_pinged: Arc::new(AsyncMutex::new(None)),
                 },
             );
             expected.insert(
@@ -788,7 +798,7 @@ mod tests {
                     discord_id: Some("456".parse().unwrap()),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
-                    last_notified: Arc::new(AsyncMutex::new(None)),
+                    last_pinged: Arc::new(AsyncMutex::new(None)),
                 },
             );
             expected.insert(
@@ -800,7 +810,7 @@ mod tests {
                     discord_id: Some("789".parse().unwrap()),
                     check_level: CheckLevel::JustOnline,
                     check_successful: Arc::new(AtomicBool::new(true)),
-                    last_notified: Arc::new(AsyncMutex::new(None)),
+                    last_pinged: Arc::new(AsyncMutex::new(None)),
                 },
             );
             expected.insert(
@@ -812,7 +822,7 @@ mod tests {
                     discord_id: None,
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
-                    last_notified: Arc::new(AsyncMutex::new(None)),
+                    last_pinged: Arc::new(AsyncMutex::new(None)),
                 },
             );
             assert_eq!(*inner, expected);
@@ -1151,12 +1161,23 @@ mod tests {
         #[derive(Copy, Clone, PartialEq, Eq, Debug)]
         enum ShouldNotify {
             Yes,
+            Silent,
             No,
         }
         #[derive(Copy, Clone, PartialEq, Eq, Debug)]
         enum NotifyStatus {
             Success,
             Fail,
+        }
+
+        /// Returns the length of the `users` array in the `allowed_mentions`
+        /// object of the JSON body of the request, or `None` if parsing fails.
+        fn get_allowed_mentions_users_len(req: &HttpMockRequest) -> Option<usize> {
+            let json = serde_json::from_slice::<serde_json::Value>(req.body.as_ref()?).ok()?;
+            json.get("allowed_mentions")?
+                .get("users")?
+                .as_array()
+                .map(Vec::len)
         }
 
         let sequence = &[
@@ -1167,14 +1188,28 @@ mod tests {
                 SiteStatus::Down,
                 ShouldNotify::Yes,
                 Some(NotifyStatus::Success),
-                None,
+                Some(Duration::from_mins(5)),
             ),
             // site is still down; should not notify
             (
                 SiteStatus::Down,
                 ShouldNotify::No,
                 None,
-                Some(NOTIFICATION_DEBOUNCE_PERIOD + Duration::from_secs(10)),
+                Some(Duration::from_mins(5)),
+            ),
+            // site is up now; should not notify
+            (
+                SiteStatus::Up,
+                ShouldNotify::No,
+                None,
+                Some(Duration::from_mins(5)),
+            ),
+            // site went down a second time within debounce period; should notify silently
+            (
+                SiteStatus::Down,
+                ShouldNotify::Silent,
+                Some(NotifyStatus::Success),
+                Some(NOTIFICATION_DEBOUNCE_PERIOD),
             ),
             // waited 25 hours; should notify again
             (
@@ -1204,7 +1239,7 @@ mod tests {
             discord_id: Some(Snowflake::new(1234)),
             check_level: CheckLevel::JustOnline,
             check_successful: Arc::new(AtomicBool::new(true)),
-            last_notified: Arc::new(AsyncMutex::new(None)),
+            last_pinged: Arc::new(AsyncMutex::new(None)),
         };
 
         let notifier = Arc::new(DiscordNotifier::new(
@@ -1225,8 +1260,26 @@ mod tests {
             });
 
             // Mocks the Discord notification endpoint; succeeds/fails based on the sequence.
-            let mut mock_discord_server = server.mock(|when, then| {
-                when.method(POST).path("/discord");
+            let mut mock_discord_server = server.mock(|mut when, then| {
+                when = when.method(POST).path("/discord");
+                // Print request body for easier test debugging
+                when = when.matches(|req| {
+                    let maybe_json = req
+                        .body
+                        .as_ref()
+                        .and_then(|body| serde_json::from_slice::<serde_json::Value>(body).ok());
+                    dbg!(maybe_json);
+                    true
+                });
+                match should_notify {
+                    ShouldNotify::Yes => {
+                        when.matches(|req| get_allowed_mentions_users_len(req) == Some(1))
+                    }
+                    ShouldNotify::Silent => {
+                        when.matches(|req| get_allowed_mentions_users_len(req) == Some(0))
+                    }
+                    ShouldNotify::No => when.any_request(),
+                };
                 then.status(match notify_status {
                     Some(NotifyStatus::Success) => 204,
                     Some(NotifyStatus::Fail) => 500,
@@ -1250,7 +1303,7 @@ mod tests {
                         "expected no notification for step {i}"
                     );
                 }
-                ShouldNotify::Yes => {
+                ShouldNotify::Yes | ShouldNotify::Silent => {
                     assert_eq!(
                         mock_discord_server.hits(),
                         1,
