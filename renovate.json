@@ -1,6 +1,24 @@
 {
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
-  ]
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": ["config:recommended"],
+    "enabledManagers": ["github-actions", "custom.jsonata"],
+    "customDatasources": {
+        "rust-releases": {
+            "defaultRegistryUrlTemplate": "https://api.github.com/repos/rust-lang/rust/releases",
+            "format": "json",
+            "transformTemplates": [
+                "{ \"releases\": $$[draft=false].{ \"version\": tag_name, \"isStable\": $not(prerelease) } }"
+            ]
+        }
+    },
+    "customManagers": [
+        {
+            "customType": "jsonata",
+            "managerFilePatterns": ["rust-toolchain.toml"],
+            "fileFormat": "toml",
+            "datasourceTemplate": "rust-releases",
+            "depNameTemplate": "rust",
+            "matchStrings": ["{\"currentValue\": $.toolchain.channel}"]
+        }
+    ]
 }
