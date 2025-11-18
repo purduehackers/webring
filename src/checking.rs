@@ -131,15 +131,15 @@ pub async fn check(
             // If the issue is not a connection issue, or if it is a connection issue and the
             // server is online, return it. Otherwise, it's a connection issue on our end, so log
             // and count the check as successful.
-            if let CheckFailure::Connection(connection_error) = &failure {
-                if !is_online().await {
-                    error!(
-                        site = %website,
-                        err = %connection_error,
-                        "Server-side connectivity issue detected: could not reach site"
-                    );
-                    return Err(());
-                }
+            if let CheckFailure::Connection(connection_error) = &failure
+                && !is_online().await
+            {
+                error!(
+                    site = %website,
+                    err = %connection_error,
+                    "Server-side connectivity issue detected: could not reach site"
+                );
+                return Err(());
             }
 
             info!(site = %website, ?failure, "site failed a check");

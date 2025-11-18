@@ -15,7 +15,6 @@ edition = "2024"
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 # Slice indexing can always panic. Why only warn in match blocks?
-match-on-vec-items = "allow"
 missing-docs-in-private-items = "warn"
 
 [dependencies]
