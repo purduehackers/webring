@@ -111,7 +111,7 @@ impl<W: Write + Send + 'static> AggregatedStats<W> {
 
         let mut prev_day = self.today.load(Ordering::Relaxed);
 
-        // If our "now" time is in the past (perhaps tasks got out of order or something), we want to count this redirect towards the most recent day rather than getting rid of the newest day and replacing it with data intended for the oldest day.
+        // If our "now" time is in the past relative to "today" (perhaps tasks got out of order or something), we want to count this redirect towards the most recent day rather than replacing and writing the data.
 
         while prev_day < now {
             match self
@@ -128,15 +128,27 @@ impl<W: Write + Send + 'static> AggregatedStats<W> {
         if prev_day < now {
             let new_counter: *mut Counts = Box::into_raw(Box::new(HashMap::new()));
 
-            // We need this guard to go into our task so it needs to be owned
-            let guard_owned = self.collector.enter();
-
-            // Release to synchronize-with `counter` and Acquire to ensure that we can see the initialization of the previous one so that we can properly access and write it.
-            let prev_ptr = guard_owned.swap(&self.counter, new_counter, Ordering::AcqRel);
+            // Release to synchronize-with `counter` and Acquire to ensure that we can see the initialization of the previous one so that we can properly read it.
+            //
+            // We do not need to guard the `prev_ptr` because it will not be retired by any other tasks in the meantime. Proof:
+            // 1. The only code path where we could retire a pointer stored in this location is this one, and this code path is guaranteed to retire the value of `prev_ptr`.
+            // 2. The only way for our `prev_ptr` to get retired while we are holding it is for another task in this code branch to also hold an identical `prev_ptr` at the same time as us.
+            // 3. Suppose for contradiction that there exists a task $x$ that is different from this one $y$ such that $x$'s `prev_ptr` equals our `prev_ptr`.
+            // 4. `prev_ptr` is valid by the invariant on `self.counter`.
+            // 5. For all tasks $t∈T$ on this code path, its value of `new_counter` is valid at the same time that its `prev_ptr` is valid, because they both need to be valid when `swap` is performed by the invariant.
+            // 6. $x$'s and $y$'s `prev_ptr` is valid during all swaps between $x$'s and $y$'s inclusive in `self.counter`'s total order, since we suppose that $x$ is still holding `prev_ptr` at least until $y$ calls `swap`.
+            // 7. For any task $s∈S⊆T$ where $s$'s call to `swap` is between $x$'s and $y$'s inclusive in the total order, by (5) and (6), $s$'s `new_counter` is valid at the same time that `prev_ptr` is.
+            // 8. By correctness of the memory allocator and (7), $s$'s `new_counter` != `prev_ptr`.
+            // 9. The task previous to this one wrote its `new_counter` to `self.counter`, which by (8) does not equal `prev_ptr`
+            // 10. That value is stored in `prev_ptr` in $y$ due to it being swapped out.
+            // 11. `prev_ptr` != `prev_ptr`. This is a contradiction, proving that the situation is impossible and we do not need to guard `prev_ptr`.
+            //
+            // Why not just guard it anyways for safety? Because we would need to transfer the guard into our `task::spawn_blocking`, and since the lifetime of a guard is tied to a lifetime of a collector, and since <https://blog.polybdenum.com/2024/06/07/the-inconceivable-types-of-rust-how-to-make-self-borrows-safe.html> isn't implemented, we cannot move the guard into the task, therefore we cannot guard `prev_ptr`.
+            let prev_ptr = self.counter.swap(new_counter, Ordering::AcqRel);
 
             let output = Arc::clone(&self.output);
 
-            // Allow it to be moved to our task
+            // Allow it to be moved into our task
             let prev_ptr = prev_ptr as usize;
 
             let this_collector = Arc::clone(&self.collector);
