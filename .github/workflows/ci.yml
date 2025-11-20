@@ -27,7 +27,7 @@ jobs:
       RUSTFLAGS: '-D warnings'
     steps:
       - name: Check out sources
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Rust toolchain
         run: rustup install --profile minimal --component clippy
@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out sources
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install pNPM
         uses: pnpm/action-setup@v4
@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out sources
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Rust toolchain
         run: rustup install --profile minimal --component rustfmt
@@ -93,7 +93,7 @@ jobs:
       contents: read
     steps:
       - name: Check out sources
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Rust toolchain
         run: rustup install --profile minimal --component llvm-tools
@@ -164,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out sources
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Rust toolchain
         run: rustup install --profile minimal
@@ -190,7 +190,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - name: Check out sources
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           sparse-checkout: ci/ssh
 
