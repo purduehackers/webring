@@ -1173,7 +1173,7 @@ mod tests {
         /// Returns the length of the `users` array in the `allowed_mentions`
         /// object of the JSON body of the request, or `None` if parsing fails.
         fn get_allowed_mentions_users_len(req: &HttpMockRequest) -> Option<usize> {
-            let json = serde_json::from_slice::<serde_json::Value>(req.body.as_ref()?).ok()?;
+            let json = serde_json::from_slice::<serde_json::Value>(&req.body().0).ok()?;
             json.get("allowed_mentions")?
                 .get("users")?
                 .as_array()
@@ -1263,20 +1263,18 @@ mod tests {
             let mut mock_discord_server = server.mock(|mut when, then| {
                 when = when.method(POST).path("/discord");
                 // Print request body for easier test debugging
-                when = when.matches(|req| {
-                    let maybe_json = req
-                        .body
-                        .as_ref()
-                        .and_then(|body| serde_json::from_slice::<serde_json::Value>(body).ok());
+                when = when.is_true(|req| {
+                    let maybe_json =
+                        serde_json::from_slice::<serde_json::Value>(&req.body().0).ok();
                     dbg!(maybe_json);
                     true
                 });
                 match should_notify {
                     ShouldNotify::Yes => {
-                        when.matches(|req| get_allowed_mentions_users_len(req) == Some(1))
+                        when.is_true(|req| get_allowed_mentions_users_len(req) == Some(1))
                     }
                     ShouldNotify::Silent => {
-                        when.matches(|req| get_allowed_mentions_users_len(req) == Some(0))
+                        when.is_true(|req| get_allowed_mentions_users_len(req) == Some(0))
                     }
                     ShouldNotify::No => when.any_request(),
                 };
@@ -1298,14 +1296,14 @@ mod tests {
             match should_notify {
                 ShouldNotify::No => {
                     assert_eq!(
-                        mock_discord_server.hits(),
+                        mock_discord_server.calls(),
                         0,
                         "expected no notification for step {i}"
                     );
                 }
                 ShouldNotify::Yes | ShouldNotify::Silent => {
                     assert_eq!(
-                        mock_discord_server.hits(),
+                        mock_discord_server.calls(),
                         1,
                         "expected notification for step {i}"
                     );
