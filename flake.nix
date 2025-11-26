@@ -1,6 +1,25 @@
+# Copyright (C) 2025 Henry Rovnyak
+# Copyright (C) 2020 Nicolas Berbiche
+#
+# This file is part of the Purdue Hackers webring.
+#
+# The Purdue Hackers webring is free software: you can redistribute it and/or
+# modify it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# The Purdue Hackers webring is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
+# for more details.
+#
+# You should have received a copy of the GNU Affero General Public License along
+# with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
+
 # Edited from...
 # https://github.com/berbiche/sample-flake-rust/blob/601a18f165deb771404e8cd177eb0b0ad7c59ad0/flake.nix
 # https://github.com/berbiche/sample-flake-rust/blob/601a18f165deb771404e8cd177eb0b0ad7c59ad0/default.nix
+
 {
   description = "The Purdue Hackers Webring";
 
