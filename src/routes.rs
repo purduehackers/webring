@@ -39,7 +39,7 @@ static FLIP_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_flip_template);
 
 /// Creates a [`Router`] with the routes for our application.
 pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
-    let mut router = Router::new()
+    Router::new()
         .nest_service(
             "/static",
             ServeDir::new(static_dir).fallback(HandlerWithoutStateExt::into_service(
@@ -60,27 +60,20 @@ pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
         .route("/previous", get(serve_previous))
         .route("/random", get(serve_random))
         .route("/flip", get(serve_flip))
+        // We use the error demo route in the README, so keep it in release mode
+        .route(
+            "/debug/panic",
+            get(async || -> () {
+                panic!();
+            }),
+        )
         .fallback_service(HandlerWithoutStateExt::into_service(
             async |request: Request| -> RouteError {
                 RouteError::NoRoute(request.uri().to_owned())
             },
         ))
-        .layer(TraceLayer::new_for_http());
-
-    // Add debugging routes
-    if cfg!(debug_assertions) {
-        router = router.route(
-            "/debug/panic",
-            get(
-                #[allow(clippy::unused_unit)]
-                async || -> () {
-                    panic!();
-                },
-            ),
-        );
-    }
-
-    router.layer(CatchPanicLayer::custom(PanicResponse))
+        .layer(TraceLayer::new_for_http())
+        .layer(CatchPanicLayer::custom(PanicResponse))
 }
 
 /// Creates a Tera template for rendering error pages.
