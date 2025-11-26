@@ -1,7 +1,18 @@
 {
     "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+
     "extends": ["config:recommended"],
-    "enabledManagers": ["github-actions", "custom.jsonata"],
+
+    "timezone": "America/Indiana/Indianapolis",
+    "automergeType": "branch",
+    "dependencyDashboardTitle": "Renovate Dependency Dashboard",
+    "semanticCommits": "enabled",
+    "prHourlyLimit": 10,
+
+    "assignees": ["kdkasad"],
+    "reviewers": ["kdkasad"],
+
+    "enabledManagers": ["github-actions", "custom.jsonata", "cargo"],
     "customManagers": [
         {
             "customType": "jsonata",
@@ -11,6 +22,29 @@
             "depNameTemplate": "rust-lang/rust",
             "versioningTemplate": "semver-coerced",
             "matchStrings": ["{\"currentValue\": $.toolchain.channel}"]
+        }
+    ],
+
+    "packageRules": [
+        {
+            "description": "Schedule Cargo updates for Friday/Saturday",
+            "matchManagers": ["cargo"],
+            "schedule": "* 8-23 * * 5,6"
+        },
+        {
+            "description": "Auto-merge patch version updates to Cargo dependencies if they pass CI",
+            "matchManagers": ["cargo"],
+            "matchUpdateTypes": ["patch"],
+            "groupName": "Cargo dependencies (patch version bumps)",
+            "automerge": true,
+            "schedule": "* * * * *"
+        },
+        {
+            "description": "Group minor version updates to Cargo dependencies into one PR",
+            "matchManagers": ["cargo"],
+            "matchUpdateTypes": ["minor"],
+            "matchCurrentVersion": "!/^0\\./",
+            "groupName": "Cargo dependencies (minor version bumps)"
         }
     ]
 }
