@@ -119,12 +119,20 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          cache-bin: false
 
-      - name: Install nextest (if not cached)
-        run: cargo nextest --version || cargo install --locked cargo-nextest
+      - name: Cache test tools
+        id: cache-test-tools
+        uses: actions/cache@v4
+        with:
+          key: cargo-bin-${{ runner.os }}-${{ runner.arch }}-1
+          path: ~/.cargo/bin
 
-      - name: Install llvm-cov (if not cached)
-        run: cargo llvm-cov --version || cargo install --locked cargo-llvm-cov
+      - name: Install test tools
+        if: ${{ steps.cache-test-tools.outputs.cache-hit != 'true' }}
+        # If changing the list of tools, be sure to increment the number at the
+        # end of the cache key in the previous step.
+        run: cargo install --locked cargo-nextest cargo-llvm-cov
 
       - name: Run tests
         run: >-
