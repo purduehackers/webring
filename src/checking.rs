@@ -1029,7 +1029,12 @@ mod tests {
 
                         // we don't want to wait for realsies
                         tokio::time::pause();
-                        tokio::time::advance(REQUEST_TIMEOUT - Duration::from_millis(100)).await;
+                        tokio::time::advance(
+                            REQUEST_TIMEOUT
+                                .checked_sub(Duration::from_millis(100))
+                                .unwrap(),
+                        )
+                        .await;
                         tokio::time::resume();
 
                         sleep.await;
