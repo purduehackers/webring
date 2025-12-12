@@ -117,7 +117,7 @@ jobs:
         run: ${{ format('tar -czvf {1} -C target/{0}/release ph-webring', matrix.target, matrix.artifact) }}
 
       - name: Upload archive artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
