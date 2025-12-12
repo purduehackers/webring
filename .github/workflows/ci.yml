@@ -123,7 +123,7 @@ jobs:
 
       - name: Cache test tools
         id: cache-test-tools
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           key: cargo-bin-${{ runner.os }}-${{ runner.arch }}-1
           path: ~/.cargo/bin
