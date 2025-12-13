@@ -56,7 +56,7 @@ or (at your option) any later version.
    <a href="https://ring.purduehackers.com/">Purdue Hackers webring</a>
    <a href="https://ring.purduehackers.com/next">Next</a>
    ```
-   You can style them how you'd like, e.g. by replacing the text of each link with whatever you want. The only real requirement we have is that they must be visible on your site's homepage, not hidden away somewhere.
+   You can style them how you'd like, e.g. by replacing the text of each link with whatever you want. However, they must be visible on your site's homepage, not hidden away somewhere. The next and previous links must not have a `target` attribute, to ensure consistent behavior when traversing the ring.
 
 2. Click the next or previous link on your site. It should return a "400 Bad Request" error with the reason being that you're not a member of the webring.
 
