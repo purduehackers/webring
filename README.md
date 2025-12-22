@@ -60,11 +60,12 @@ or (at your option) any later version.
 
 2. Click the next or previous link on your site. It should return a "400 Bad Request" error with the reason being that you're not a member of the webring.
 
-   If it instead says that the request doesn't indicate which site it comes from, try the following:
-   1. Add the `referrerpolicy="origin"` attribute to the links in your HTML.
-   2. Add `?host=<your-domain>` to the `/next` and `/previous` URLs.
-   3. Ping Kian in [#webring] after trying the two steps above.
+   If it instead says that the request doesn't indicate which site it comes from, try the following (in this order):
+   1. Remove the `rel="noreferrer"` attribute from the links in your HTML.
+   2. Add the `referrerpolicy="origin"` attribute to the links in your HTML.
+   3. Add `?host=<your-domain>` to the `/next` and `/previous` URLs.
+   4. Ping Kian in [#webring] after trying the two steps above.
 
-3. Send a message in [#webring] with your desired name (for the index page) and your site URL.
+4. Send a message in [#webring] with your desired name (for the index page) and your site URL.
    
 [#webring]: https://discord.com/channels/772576325897945119/1319140464812753009
