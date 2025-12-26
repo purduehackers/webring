@@ -501,7 +501,7 @@ mod tests {
         http::{Request, Uri, header},
         response::IntoResponse,
     };
-    use chrono::Utc;
+
     use eyre::eyre;
     use http_body_util::BodyExt;
     use indoc::indoc;
@@ -512,10 +512,7 @@ mod tests {
     use tower::{Service, ServiceExt};
     use tower_http::catch_panic::ResponseForPanic;
 
-    use crate::{
-        stats::{TIMEZONE, UNKNOWN_ORIGIN},
-        webring::Webring,
-    };
+    use crate::{stats::UNKNOWN_ORIGIN, webring::Webring};
 
     use super::{OriginUriLocation, PanicResponse, RouteError, create_router};
 
@@ -571,8 +568,6 @@ mod tests {
     async fn index() {
         let (router, webring, tmpfiles) = app().await;
 
-        let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
-
         // Request `/`
         let res = router
             .oneshot(
@@ -590,10 +585,7 @@ mod tests {
             .unwrap();
         assert_eq!("Hello homepage!", text);
         assert_eq!(status, StatusCode::OK);
-        webring.assert_stat_entry(
-            (today, "kasad.com", "ring.purduehackers.com", "kasad.com"),
-            1,
-        );
+        webring.assert_stat_entry(("kasad.com", "ring.purduehackers.com", "kasad.com"), 1);
 
         drop(tmpfiles);
     }
@@ -601,8 +593,6 @@ mod tests {
     #[tokio::test]
     async fn index_unknown_referer() {
         let (router, webring, tmpfiles) = app().await;
-
-        let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
 
         let res = router
             .oneshot(
@@ -622,7 +612,6 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         webring.assert_stat_entry(
             (
-                today,
                 UNKNOWN_ORIGIN.as_str(),
                 "ring.purduehackers.com",
                 UNKNOWN_ORIGIN.as_str(),
@@ -636,8 +625,6 @@ mod tests {
     #[tokio::test]
     async fn visit() {
         let (router, webring, tmpfiles) = app().await;
-
-        let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
 
         let res = router
             .oneshot(
@@ -656,7 +643,6 @@ mod tests {
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         webring.assert_stat_entry(
             (
-                today,
                 "ring.purduehackers.com",
                 "clementine.viridian.page",
                 "ring.purduehackers.com",
