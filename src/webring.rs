@@ -20,6 +20,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 //! Ring behavior and data structures
 
 use std::{
+    io::{Empty, empty},
     net::IpAddr,
     path::{Path, PathBuf},
     sync::{
@@ -29,7 +30,7 @@ use std::{
 };
 
 use axum::http::{Uri, uri::Authority};
-use chrono::TimeDelta;
+use chrono::{TimeDelta, Utc};
 use futures::{StreamExt, future::join, stream::FuturesUnordered};
 use indexmap::IndexMap;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
@@ -213,7 +214,7 @@ pub struct Webring {
     /// Discord notifier for notifying members of issues with their sites
     notifier: Option<Arc<DiscordNotifier>>,
     /// Statistics collected about the ring
-    stats: Arc<Stats>,
+    stats: Arc<Stats<Empty>>,
     /// Current configuration of the webring, used for detecting changes when reloading
     config: Arc<AsyncRwLock<Option<Config>>>,
 }
@@ -228,7 +229,7 @@ impl Webring {
             members: RwLock::new(member_map_from_config_table(&config.members)),
             static_dir_path: config.webring.static_dir.clone(),
             homepage: AsyncRwLock::new(None),
-            stats: Arc::new(Stats::new()),
+            stats: Arc::new(Stats::new(Utc::now(), empty())),
             file_watcher: OnceLock::default(),
             base_address: config.webring.base_url(),
             notifier: config
@@ -648,7 +649,7 @@ impl Webring {
     }
 
     #[cfg(test)]
-    pub fn assert_stat_entry(&self, entry: (chrono::NaiveDate, &str, &str, &str), count: u64) {
+    pub fn assert_stat_entry(&self, entry: (&str, &str, &str), count: u64) {
         self.stats.assert_stat_entry(entry, count);
     }
 }
@@ -673,7 +674,7 @@ mod tests {
     use std::{
         collections::HashSet,
         fs::{File, OpenOptions},
-        io::Write as _,
+        io::{Write as _, empty},
         path::PathBuf,
         sync::{
             Arc, OnceLock, RwLock,
@@ -699,7 +700,7 @@ mod tests {
     use crate::{
         config::{Config, MemberSpec},
         discord::{DiscordNotifier, NOTIFICATION_DEBOUNCE_PERIOD, Snowflake},
-        stats::{TIMEZONE, UNKNOWN_ORIGIN},
+        stats::{Stats, UNKNOWN_ORIGIN},
         webring::{CheckLevel, Webring},
     };
 
@@ -716,7 +717,7 @@ mod tests {
                 base_address: Intern::default(),
                 base_authority: Intern::new("ring.purduehackers.com".parse().unwrap()),
                 notifier: None,
-                stats: Arc::default(),
+                stats: Arc::new(Stats::new(Utc::now(), empty())),
                 config: Arc::new(AsyncRwLock::new(None)),
             }
         }
@@ -847,21 +848,11 @@ mod tests {
             assert_eq!(*inner, expected);
         }
 
-        let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
-
         webring.assert_next(
             "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
             Ok("kasad.com"),
         );
-        webring.assert_stat_entry(
-            (
-                today,
-                "hrovnyak.gitlab.io",
-                "kasad.com",
-                "hrovnyak.gitlab.io",
-            ),
-            1,
-        );
+        webring.assert_stat_entry(("hrovnyak.gitlab.io", "kasad.com", "hrovnyak.gitlab.io"), 1);
 
         webring.assert_prev(
             "https://hrovnyak.gitlab.io/bruh/bruh/bruh?bruh=bruh",
@@ -869,7 +860,6 @@ mod tests {
         );
         webring.assert_stat_entry(
             (
-                today,
                 "hrovnyak.gitlab.io",
                 "refuse-the-r.ing",
                 "hrovnyak.gitlab.io",
@@ -1047,15 +1037,12 @@ mod tests {
         .unwrap();
         let webring = Webring::new(&config);
 
-        let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
-
         let uri = webring
             .random_page(None, "0.0.0.0".parse().unwrap())
             .unwrap();
         assert_eq!(uri, Intern::new("kasad.com".parse().unwrap()));
         webring.assert_stat_entry(
             (
-                today,
                 UNKNOWN_ORIGIN.as_str(),
                 "kasad.com",
                 UNKNOWN_ORIGIN.as_str(),
@@ -1073,8 +1060,6 @@ mod tests {
         "# }).unwrap();
         let webring = Webring::new(&config);
 
-        let today = Utc::now().with_timezone(&TIMEZONE).date_naive();
-
         let uri = webring
             .random_page(
                 Some(&"clementine.viridian.page".parse().unwrap()),
@@ -1084,7 +1069,6 @@ mod tests {
         assert_eq!(uri, Intern::new("kasad.com".parse().unwrap()));
         webring.assert_stat_entry(
             (
-                today,
                 "clementine.viridian.page",
                 "kasad.com",
                 "clementine.viridian.page",
