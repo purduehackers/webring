@@ -31,7 +31,10 @@ use sarlacc::Intern;
 use serde::{Deserialize, Deserializer, de};
 use tracing::{instrument, level_filters::LevelFilter};
 
-use crate::{discord::Snowflake, webring::CheckLevel};
+use crate::{
+    discord::Snowflake,
+    webring::{CheckLevel, EnrollmentStatus},
+};
 
 /// Webring configuration object
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -135,6 +138,9 @@ pub struct MemberSpec {
     /// Level of checks to perform on the member's site
     #[serde(default)]
     pub check_level: CheckLevel,
+    /// Enrollment status of the member
+    #[serde(default)]
+    pub enrollment: EnrollmentStatus,
 }
 
 impl MemberSpec {
@@ -245,7 +251,11 @@ mod tests {
     use sarlacc::Intern;
     use tracing::level_filters::LevelFilter;
 
-    use crate::{config::MemberSpec, discord::Snowflake, webring::CheckLevel};
+    use crate::{
+        config::MemberSpec,
+        discord::Snowflake,
+        webring::{CheckLevel, EnrollmentStatus},
+    };
 
     use super::{Config, DiscordTable, LoggingTable, NetworkTable, WebringTable};
 
@@ -400,6 +410,7 @@ mod tests {
                 uri: Intern::new(Uri::from_static("https://kasad.com")),
                 discord_id: Some(Snowflake::from(123_456_789)),
                 check_level: CheckLevel::ForLinks,
+                enrollment: EnrollmentStatus::default(),
             },
             result.members["kian"]
         );
@@ -408,6 +419,7 @@ mod tests {
                 uri: Intern::new(Uri::from_static("https://hrovnyak.gitlab.io")),
                 discord_id: None,
                 check_level: CheckLevel::None,
+                enrollment: EnrollmentStatus::default(),
             },
             result.members["henry"]
         );
@@ -436,6 +448,7 @@ mod tests {
                 uri: Intern::new(Uri::from_static("https://kasad.com")),
                 discord_id: Some(Snowflake::from(123_456_789)),
                 check_level: CheckLevel::ForLinks,
+                enrollment: EnrollmentStatus::default(),
             },
             result.members["kian"]
         );
@@ -444,6 +457,7 @@ mod tests {
                 uri: Intern::new(Uri::from_static("https://hrovnyak.gitlab.io")),
                 discord_id: None,
                 check_level: CheckLevel::None,
+                enrollment: EnrollmentStatus::default(),
             },
             result.members["henry"]
         );
