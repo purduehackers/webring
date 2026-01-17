@@ -29,6 +29,8 @@ use sarlacc::Intern;
 use serde::Serialize;
 use tera::Tera;
 
+use crate::webring::EnrollmentStatus;
+
 /// Represents the rendered webring homepage
 #[derive(Clone, Debug)]
 pub struct Homepage {
@@ -70,6 +72,8 @@ pub struct MemberForHomepage {
     pub website: SerializableUri,
     /// Whether the member's website check was successful
     pub check_successful: bool,
+    /// Member's enrollment status
+    pub enrollment: EnrollmentStatus,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
@@ -111,6 +115,8 @@ mod tests {
     use sarlacc::Intern;
     use tempfile::TempDir;
 
+    use crate::webring::EnrollmentStatus;
+
     use super::{Homepage, MemberForHomepage, SerializableUri};
 
     #[tokio::test]
@@ -120,7 +126,7 @@ mod tests {
         let template = r#"
 <table>
 {% for member in members -%}
-<tr><td>{{ member.name }}</td><a href="{{ base_addr.href }}visit?member={{ member.website.authority }}">{{ member.website.authority }}</a></td></tr>
+<tr><td>{{ member.enrollment }}</td><td>{{ member.name }}</td><a href="{{ base_addr.href }}visit?member={{ member.website.authority }}">{{ member.website.authority }}</a></td></tr>
 {% endfor -%}
 </table>
 "#;
@@ -134,11 +140,13 @@ mod tests {
                 name: s("kian"),
                 website: u("https://kasad.com/"),
                 check_successful: true,
+                enrollment: EnrollmentStatus::Student,
             },
             MemberForHomepage {
                 name: s("henry"),
                 website: u("hrovnyak.gitlab.io"),
                 check_successful: true,
+                enrollment: EnrollmentStatus::Alum,
             },
         ];
         let homepage = Homepage::new(
@@ -153,8 +161,8 @@ mod tests {
         assert_eq!(
             r#"
 <table>
-<tr><td>kian</td><a href="https:&#x2F;&#x2F;ring.purduehackers.com&#x2F;visit?member=kasad.com">kasad.com</a></td></tr>
-<tr><td>henry</td><a href="https:&#x2F;&#x2F;ring.purduehackers.com&#x2F;visit?member=hrovnyak.gitlab.io">hrovnyak.gitlab.io</a></td></tr>
+<tr><td>student</td><td>kian</td><a href="https:&#x2F;&#x2F;ring.purduehackers.com&#x2F;visit?member=kasad.com">kasad.com</a></td></tr>
+<tr><td>alum</td><td>henry</td><a href="https:&#x2F;&#x2F;ring.purduehackers.com&#x2F;visit?member=hrovnyak.gitlab.io">hrovnyak.gitlab.io</a></td></tr>
 </table>
 "#,
             html

@@ -41,7 +41,7 @@ use tokio::{
 };
 
 use sarlacc::Intern;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{Instrument, debug, error, field::display, info, info_span, instrument, warn};
 
@@ -54,7 +54,7 @@ use crate::{
 };
 
 /// Represents the level of checking to perform on a member's website.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum CheckLevel {
     /// Don't perform any checks; site is always considered available.
@@ -65,14 +65,19 @@ pub enum CheckLevel {
     JustOnline,
     /// Check that the site is online and that its webring links are present and valid.
     #[serde(rename = "links", alias = "full")]
+    #[default]
     ForLinks,
 }
 
-impl Default for CheckLevel {
-    /// Default check level for a member if none is specified in the configuration
-    fn default() -> Self {
-        CheckLevel::ForLinks
-    }
+/// Enrollment status, e.g. student or otherwise
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EnrollmentStatus {
+    /// A student currently enrolled at Purdue
+    #[default]
+    Student,
+    /// Someone who was formerly a student but has since graduated
+    Alum,
 }
 
 /// Ring member
@@ -86,6 +91,8 @@ struct Member {
     authority: Intern<Authority>,
     /// Discord ID of the member, if they opt in to [Discord integration][crate::discord].
     discord_id: Option<Snowflake>,
+    /// Enrollment status of the member
+    enrollment: EnrollmentStatus,
     /// Level of checking to perform on the member's site
     check_level: CheckLevel,
     /// Whether the last check was successful
@@ -104,6 +111,7 @@ impl From<(&str, &MemberSpec)> for Member {
             website: spec.uri(),
             authority: Intern::from_ref(spec.uri().authority().unwrap()),
             discord_id: spec.discord_id,
+            enrollment: spec.enrollment,
             check_level: spec.check_level,
             check_successful: Arc::new(AtomicBool::new(true)),
             last_pinged: Arc::new(AsyncMutex::new(None)),
@@ -467,6 +475,7 @@ impl Webring {
                         name: member_info.name.clone(),
                         website: member_info.website.as_ref().into(),
                         check_successful: member_info.check_successful.load(Ordering::Relaxed),
+                        enrollment: member_info.enrollment,
                     })
                     .collect::<Vec<_>>()
             };
@@ -700,7 +709,7 @@ mod tests {
         config::{Config, MemberSpec},
         discord::{DiscordNotifier, NOTIFICATION_DEBOUNCE_PERIOD, Snowflake},
         stats::{TIMEZONE, UNKNOWN_ORIGIN},
-        webring::{CheckLevel, Webring},
+        webring::{CheckLevel, EnrollmentStatus, Webring},
     };
 
     use super::{Member, TraverseWebringError};
@@ -803,6 +812,7 @@ mod tests {
                     website: Intern::new(Uri::from_static("hrovnyak.gitlab.io")),
                     authority: Intern::new("hrovnyak.gitlab.io".parse().unwrap()),
                     discord_id: Some("123".parse().unwrap()),
+                    enrollment: EnrollmentStatus::default(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                     last_pinged: Arc::new(AsyncMutex::new(None)),
@@ -815,6 +825,7 @@ mod tests {
                     website: Intern::new(Uri::from_static("kasad.com")),
                     authority: Intern::new("kasad.com".parse().unwrap()),
                     discord_id: Some("456".parse().unwrap()),
+                    enrollment: EnrollmentStatus::default(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                     last_pinged: Arc::new(AsyncMutex::new(None)),
@@ -827,6 +838,7 @@ mod tests {
                     website: Intern::new(Uri::from_static("https://localhost:32751")),
                     authority: Intern::new("localhost:32751".parse().unwrap()),
                     discord_id: Some("789".parse().unwrap()),
+                    enrollment: EnrollmentStatus::default(),
                     check_level: CheckLevel::JustOnline,
                     check_successful: Arc::new(AtomicBool::new(true)),
                     last_pinged: Arc::new(AsyncMutex::new(None)),
@@ -839,6 +851,7 @@ mod tests {
                     website: Intern::new(Uri::from_static("ws://refuse-the-r.ing")),
                     authority: Intern::new("refuse-the-r.ing".parse().unwrap()),
                     discord_id: None,
+                    enrollment: EnrollmentStatus::default(),
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                     last_pinged: Arc::new(AsyncMutex::new(None)),
@@ -1256,6 +1269,7 @@ mod tests {
             website: Intern::new(site_url.clone()),
             authority: Intern::new(site_url.into_parts().authority.unwrap()),
             discord_id: Some(Snowflake::new(1234)),
+            enrollment: EnrollmentStatus::default(),
             check_level: CheckLevel::JustOnline,
             check_successful: Arc::new(AtomicBool::new(true)),
             last_pinged: Arc::new(AsyncMutex::new(None)),
