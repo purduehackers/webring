@@ -137,7 +137,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 
                 <p>
                     This is a <a href="https://en.wikipedia.org/wiki/Webring">web ring</a>
-                    for the members (and friends) of the
+                    for the members and alumni of the
                     <a href="https://purduehackers.com">Purdue Hackers club</a>.
                 </p>
                 <p>
@@ -151,6 +151,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
                     <table>
                         <thead>
                             <tr>
+                                <th></th>
                                 <th>Member</th>
                                 <th>Site link</th>
                             </tr>
@@ -158,6 +159,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
                         <tbody>
                             {% for member in members -%}
                             <tr>
+                                <td>{% if member.enrollment == "alum" %}🎓{% endif %}</td>
                                 <td>{{ member.name }}</td>
                                 <td>
                                     <a
