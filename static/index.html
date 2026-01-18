@@ -151,7 +151,6 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
                     <table>
                         <thead>
                             <tr>
-                                <th></th>
                                 <th>Member</th>
                                 <th>Site link</th>
                             </tr>
@@ -159,8 +158,12 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
                         <tbody>
                             {% for member in members -%}
                             <tr>
-                                <td>{% if member.enrollment == "alum" %}🎓{% endif %}</td>
-                                <td>{{ member.name }}</td>
+                                <td>
+                                    {{ member.name }}{% if member.enrollment == "alum" %}&nbsp;<span
+                                        class="alum-icon"
+                                        >🎓</span
+                                    >{% endif %}
+                                </td>
                                 <td>
                                     <a
                                         href="{{ base_addr.href }}visit?member={{ member.website.authority }}"

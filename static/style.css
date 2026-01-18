@@ -100,20 +100,23 @@ section {
 }
 
 table {
-    border-spacing: 32px 0;
+    border-spacing: 0;
 }
 
 table td,
 table th {
-    padding: 4px 0;
+    padding-block: 4px;
     text-align: left;
+    --padding-inline: 32px;
 }
 
-/* table tbody, table thead { */
-/*     border-width: 1pt 0 1pt 0; */
-/*     border-color: #262426; */
-/*     border-style: solid; */
-/* } */
+table :is(td, th):not(:last-child) {
+    padding-inline-end: var(--padding-inline);
+}
+
+.alum-icon {
+    padding-inline-start: 0.5em;
+}
 
 a:link {
     color: #2874a6;
@@ -133,8 +136,8 @@ a:link {
 
 /* For very small screens */
 @media (max-width: 400px) {
-    table {
-        border-spacing: 24px 0;
+    table :is(td, th) {
+        --padding-inline: 24px;
     }
 }
 
@@ -151,5 +154,9 @@ a:link {
     #tablecontainer {
         align-items: start;
         overflow-x: auto;
+    }
+
+    table {
+        margin-inline: 12px;
     }
 }
