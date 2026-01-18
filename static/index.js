@@ -18,16 +18,23 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 */
 
 function setFlip(flip) {
-    document.body.style.transform = flip ? "scaleX(-1)" : ""
-    const links = document.getElementsByTagName("a")
+    document.body.style.transform = flip ? "scaleX(-1)" : "";
+    const links = document.getElementsByTagName("a");
     for (const link of links) {
         if (flip) {
-            link.href = "/flip?url=" + encodeURIComponent(link.href)
+            link.href = "/flip?url=" + encodeURIComponent(link.href);
         } else {
-            const url = new URL(link.href)
+            const url = new URL(link.href);
             if (url.pathname === "/flip") {
-                link.href = url.searchParams.get("url")
+                link.href = url.searchParams.get("url");
             }
         }
     }
 }
+
+document.getElementsByTagName("a").forEach(a => {
+    if (a.host !== window.location.host && !a.getAttribute("data-umami-event")) {
+        a.setAttribute("data-umami-event", "outbound-link-click");
+        a.setAttribute("data-umami-event-url", a.href);
+    }
+});

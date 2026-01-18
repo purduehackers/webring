@@ -76,6 +76,12 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
             defer
             src="/static/index.js"
         ></script>
+
+        <script
+            defer
+            src="https://umami.purduehackers.com/script.js"
+            data-website-id="8bb9457c-0530-4636-8407-48ccccff8e3a"
+        ></script>
     </head>
 
     <body>
@@ -167,6 +173,9 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
                                 <td>
                                     <a
                                         href="{{ base_addr.href }}visit?member={{ member.website.authority }}"
+                                        data-umami-event="visit-member"
+                                        data-umami-event-name="{{ member.name }}"
+                                        data-umami-event-site="{{ member.website.authority }}"
                                         >{{ member.website.authority }}{%- if
                                         member.website.path_and_query != "/" -%} {{
                                         member.website.path_and_query }} {%- endif %}</a
@@ -186,6 +195,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
                             id="flip"
                             name="flip"
                             onchange="setFlip(this.checked)"
+                            data-umami-event="backwards-mode-toggle"
                         />
                     </form>
                 </div>
