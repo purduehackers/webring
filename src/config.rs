@@ -55,6 +55,7 @@ pub struct Config {
     pub members: IndexMap<String, MemberSpec>,
 }
 
+/// Configuration relating to the core webring functionality
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct WebringTable {
