@@ -55,6 +55,7 @@ struct IpInfo {
     started_from: Intern<Authority>,
 }
 
+/// Counters for click statistic groups
 #[derive(Debug, Default)]
 struct AggregatedStats {
     /// (Date (with timezone `TIMEZONE`), From, To, Started From) → Count
@@ -70,6 +71,7 @@ struct AggregatedStats {
     >,
 }
 
+/// Tracks statistics of clicks through the webring
 #[derive(Debug, Default)]
 pub struct Stats {
     /// Aggregated statistics

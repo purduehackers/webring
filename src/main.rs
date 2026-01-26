@@ -46,6 +46,7 @@ mod routes;
 mod stats;
 mod webring;
 
+/// Command line options for the webring command
 #[derive(clap::Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
 struct CliOptions {
