@@ -76,6 +76,7 @@ pub struct MemberForHomepage {
     pub enrollment: EnrollmentStatus,
 }
 
+/// Contains the information about a URI that we care about while also implementing `Serialize`
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
 pub struct SerializableUri {
     /// Scheme name (without `://` part)
