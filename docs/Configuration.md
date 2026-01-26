@@ -134,6 +134,7 @@ Controls the webring's logging behavior.
 | ---                         | ---      | ---                                                              | ---                                                 |
 | `verbosity` (alias `level`) | no       | string (one of `off`, `trace`, `debug`, `info`, `warn`, `error`) | `info` for release builds; `debug` for debug builds |
 | `log-file`                  | no       | string (path)                                                    | none                                                |
+| `sentry-dsn`                | no       | string (URL)                                                     | none                                                |
 
 Example:
 ```toml
@@ -156,6 +157,13 @@ The value `off` means no messages will be printed; logging is disabled.
 Specifies a path to a file to write logs to in addition to the standard error
 stream. New log lines will be appended to the file; the webring will never
 truncate the file. The file will be created if it does not exist.
+
+#### `sentry-dsn`
+
+When set, the Sentry integration will be enabled. This sets the [DSN] to send
+events to. See Sentry's documentation for more details.
+
+[DSN]: https://docs.sentry.io/concepts/key-terms/dsn-explainer/
 
 ### `discord` table
 

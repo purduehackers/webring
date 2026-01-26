@@ -96,6 +96,9 @@ pub struct LoggingTable {
 
     /// File to print logs to in addition to the console
     pub log_file: Option<PathBuf>,
+
+    /// Sentry.io DSN to connect to for Sentry integration
+    pub sentry_dsn: Option<sentry::types::Dsn>,
 }
 
 impl Default for LoggingTable {
@@ -107,6 +110,7 @@ impl Default for LoggingTable {
                 LevelFilter::INFO
             },
             log_file: None,
+            sentry_dsn: None,
         }
     }
 }
@@ -222,11 +226,16 @@ where
 }
 
 impl Config {
+    /// Load configuration from a TOML string.
+    pub fn parse_from_toml(toml: &str) -> eyre::Result<Self> {
+        Ok(toml::from_str(toml)?)
+    }
+
     /// Load configuration from the given TOML file.
     #[instrument(err)]
     pub async fn parse_from_file(path: &Path) -> eyre::Result<Self> {
         let file_contents = tokio::fs::read_to_string(path).await?;
-        Ok(toml::from_str(&file_contents)?)
+        Self::parse_from_toml(&file_contents)
     }
 
     /// Returns `true` if any settings other than members have changed between the old and new
@@ -271,6 +280,7 @@ mod tests {
 
             [logging]
             verbosity = "info"
+            sentry-dsn = "https://c0f6872ae63b8b24101faf62177bbd0b@o2398742983742982.ingest.us.sentry.io/2734298742987340"
 
             [discord]
             webhook-url = "https://api.discord.com/webhook-or-something"
@@ -288,6 +298,7 @@ mod tests {
             logging: LoggingTable {
                 verbosity: LevelFilter::INFO,
                 log_file: None,
+                sentry_dsn: Some("https://c0f6872ae63b8b24101faf62177bbd0b@o2398742983742982.ingest.us.sentry.io/2734298742987340".parse().unwrap()),
             },
             discord: Some(DiscordTable {
                 webhook_url: Url::parse("https://api.discord.com/webhook-or-something").unwrap(),
@@ -340,7 +351,8 @@ mod tests {
                 } else {
                     LevelFilter::INFO
                 },
-                log_file: None
+                log_file: None,
+                sentry_dsn: None,
             },
             actual.logging
         );

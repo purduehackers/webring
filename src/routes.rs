@@ -38,8 +38,10 @@ use axum::{
     response::{Html, IntoResponse, NoContent, Response},
     routing::get,
 };
+use sentry::integrations::tower::{NewSentryLayer, SentryHttpLayer};
 use serde::{Deserialize, Serialize};
 use tera::Tera;
+use tower::ServiceBuilder;
 use tower_http::{
     catch_panic::{CatchPanicLayer, ResponseForPanic},
     cors::{Any, CorsLayer},
@@ -91,8 +93,13 @@ pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
                 RouteError::NoRoute(request.uri().to_owned())
             },
         ))
-        .layer(TraceLayer::new_for_http())
-        .layer(CatchPanicLayer::custom(PanicResponse))
+        .layer(
+            ServiceBuilder::new()
+                .layer(NewSentryLayer::new_from_top())
+                .layer(SentryHttpLayer::new().enable_transaction().enable_pii())
+                .layer(CatchPanicLayer::custom(PanicResponse))
+                .layer(TraceLayer::new_for_http()),
+        )
 }
 
 /// Creates a Tera template for rendering error pages.
