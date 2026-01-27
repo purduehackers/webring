@@ -55,20 +55,59 @@ struct CliOptions {
     config_file: PathBuf,
 }
 
-#[tokio::main]
-#[instrument]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     // Parse CLI options
     let cli = CliOptions::parse();
 
     // Load config
-    let Ok(cfg) = Config::parse_from_file(&cli.config_file)
-        .await
-        .map(Arc::new)
-    else {
-        return ExitCode::FAILURE;
+    let maybe_cfg = {
+        let cfg_toml = match std::fs::read_to_string(&cli.config_file) {
+            Ok(contents) => contents,
+            Err(err) => {
+                eprintln!(
+                    "Failed to read configuration file {}: {}",
+                    cli.config_file.display(),
+                    err
+                );
+                return ExitCode::FAILURE;
+            }
+        };
+        Config::parse_from_toml(&cfg_toml).map(Arc::new)
+    };
+    let cfg = match maybe_cfg {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            eprintln!(
+                "Failed to parse configuration file {}: {}",
+                cli.config_file.display(),
+                err
+            );
+            return ExitCode::FAILURE;
+        }
     };
 
+    // Set up Sentry integration. This must be done before the Tokio runtime is
+    // created, according to Sentry's docs.
+    let _guard = sentry::init((
+        cfg.logging.sentry_dsn.as_ref(),
+        sentry::ClientOptions {
+            release: sentry::release_name!(),
+            send_default_pii: true,
+            ..Default::default()
+        },
+    ));
+
+    // Construct async runtime and run async entry point
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async_main(cli, cfg))
+}
+
+/// Async entry point to the webring
+#[instrument]
+async fn async_main(cli: CliOptions, cfg: Arc<Config>) -> ExitCode {
     // Set up logging
 
     // Create two loggers, only one of which will be used depending on whether
