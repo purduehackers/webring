@@ -176,7 +176,7 @@ jobs:
           files: target/llvm-cov/codecov.json
 
       - name: Upload HTML coverage report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }} # Upload reports even if tests failed
         with:
           name: coverage-html
