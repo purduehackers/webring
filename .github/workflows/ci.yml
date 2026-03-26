@@ -169,7 +169,7 @@ jobs:
           file: target/nextest/ci/junit.xml
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         if: ${{ !cancelled() }} # Upload reports even if tests failed
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
