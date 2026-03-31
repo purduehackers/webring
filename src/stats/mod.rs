@@ -137,7 +137,7 @@ impl Stats {
     /// Split apart to allow injecting the current time for testing purposes.
     #[expect(clippy::cast_possible_wrap)]
     fn prune_seen_ips_impl(&self, now: DateTime<Utc>) {
-        let mut ip_tracking = self.ip_tracking.pin();
+        let ip_tracking = self.ip_tracking.pin();
         // Since papaya is lock-free it may be possible for things to be inserted in between these before/after calls so the number may not be exact. Too bad!
         let before = ip_tracking.len();
         ip_tracking.retain(|_ip_addr, info| now - info.last_seen < IP_TRACKING_TTL);
