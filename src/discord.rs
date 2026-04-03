@@ -101,19 +101,11 @@ impl DiscordNotifier {
     }
 
     /// Send a message in the channel this notifier is registered to.
-    ///
-    /// `user_id` is the ID of the user who will be mentioned. If `silent` is
-    /// `true`, the message will mention but not notify/ping the given user.
     #[instrument(name = "discord.send_message", skip(self, message), err(Display))]
-    pub async fn send_message(
-        &self,
-        user_id: Snowflake,
-        message: &str,
-        silent: bool,
-    ) -> eyre::Result<()> {
+    pub async fn send_message(&self, ping: Option<Snowflake>, message: &str) -> eyre::Result<()> {
         let result;
         loop {
-            let response = self.send_single_message(user_id, message, silent).await?;
+            let response = self.send_single_message(ping, message).await?;
             // If we get rate limited, try again.
             // See https://discord.com/developers/docs/topics/rate-limits.
             if response.status() == StatusCode::TOO_MANY_REQUESTS {
@@ -148,9 +140,8 @@ impl DiscordNotifier {
     /// can safely be logged or displayed to a user.
     async fn send_single_message(
         &self,
-        user_id: Snowflake,
+        ping: Option<Snowflake>,
         message: &str,
-        silent: bool,
     ) -> eyre::Result<Response> {
         const SUPPRESS_EMBEDS: u16 = 1 << 2;
         self.client
@@ -159,14 +150,9 @@ impl DiscordNotifier {
             .json(&json!(
                 {
                     "content": message,
-                    "allowed_mentions": {
-                        "users": (
-                            if silent {
-                                vec![]
-                            } else {
-                                vec![user_id.to_string()]
-                            }
-                        )
+                    "allowed_mentions": match ping {
+                        Some(id) => json!({ "users": [id.to_string()] }),
+                        None => json!({}),
                     },
                     "flags": SUPPRESS_EMBEDS,
                 }
@@ -199,7 +185,7 @@ async fn sleep_from_retry_after(header_val: &HeaderValue) -> eyre::Result<()> {
 mod tests {
     use reqwest::Url;
 
-    use super::*;
+    use super::DiscordNotifier;
 
     /// Tests sending a message in Discord.
     ///
@@ -208,29 +194,17 @@ mod tests {
     /// - `DISCORD_PING_USER_ID`: The ID of the user to ping.
     #[tokio::test]
     #[ignore = "requires secret Discord webhook environment"]
-    // FIXME: add #[coverage(off)] once that attribute is stabilized
     async fn send_notification() {
         let url = std::env::var("DISCORD_WEBHOOK_URL").unwrap();
-        let user_id = std::env::var("DISCORD_PING_USER_ID")
-            .unwrap()
-            .parse::<Snowflake>()
-            .unwrap();
+        let user_id = std::env::var("DISCORD_PING_USER_ID").unwrap();
         let notifier = DiscordNotifier::new(&Url::parse(&url).unwrap());
+        // Send a message with no ping
+        notifier.send_message(None, "this is a test").await.unwrap();
         // Send a message with a ping
         notifier
             .send_message(
-                user_id,
+                Some(user_id.parse().unwrap()),
                 &format!("this is a test to ping <@{user_id}>"),
-                false,
-            )
-            .await
-            .unwrap();
-        // Send a message with a silent mention
-        notifier
-            .send_message(
-                user_id,
-                &format!("this is a test to silently mention <@{user_id}>"),
-                true,
             )
             .await
             .unwrap();
