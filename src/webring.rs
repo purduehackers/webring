@@ -145,18 +145,16 @@ impl Member {
 
             debug!(site = %website, ?check_result, "got check result for member site");
             if let Some(failure) = check_result {
-                let prev_was_successful = successful.swap(false, Ordering::Relaxed);
+                successful.store(false, Ordering::Relaxed);
                 if let (Some(notifier), Some(user_id)) = (notifier, discord_id_for_block) {
                     // Notifications are enabled. Send notification asynchronously.
                     Some(tokio::spawn(async move {
-                        // If the last check was successful or the last notification was sent more than
-                        // a day ago, notify the user.
+                        // If the last notification was sent more than a day
+                        // ago, notify the user.
                         let mut last_notified = last_notified_for_block.lock().await;
-                        if prev_was_successful
-                            || last_notified.is_none_or(|last| {
-                                Instant::now().duration_since(last) > NOTIFICATION_DEBOUNCE_PERIOD
-                            })
-                        {
+                        if last_notified.is_none_or(|last| {
+                            Instant::now().duration_since(last) > NOTIFICATION_DEBOUNCE_PERIOD
+                        }) {
                             let message = format!("<@{}> {}", user_id, failure.to_message());
                             if notifier.send_message(Some(user_id), &message).await.is_ok() {
                                 *last_notified = Some(Instant::now());
