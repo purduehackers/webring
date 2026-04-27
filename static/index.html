@@ -190,14 +190,30 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 
                 <div id="fun-selector">
                     <form action="#">
-                        <label for="flip">Backwards mode</label>
-                        <input
-                            type="checkbox"
-                            id="flip"
-                            name="flip"
-                            onchange="setFlip(this.checked)"
-                            data-umami-event="backwards-mode-toggle"
-                        />
+                        <div>
+                            <label for="flip">
+                                Backwards mode
+                                <input
+                                    type="checkbox"
+                                    id="flip"
+                                    name="flip"
+                                    onchange="setFlip(this.checked)"
+                                    data-umami-event="backwards-mode-toggle"
+                                />
+                            </label>
+                        </div>
+                        <div>
+                            <label for="ausflip">
+                                Australia mode
+                                <input
+                                    type="checkbox"
+                                    id="ausflip"
+                                    name="ausflip"
+                                    onchange="setAusFlip(this.checked)"
+                                    data-umami-event="ausflip-mode-toggle"
+                                />
+                            </label>
+                        </div>
                     </form>
                 </div>
             </section>

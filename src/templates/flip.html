@@ -32,7 +32,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
             height: 100%;
             width: 100%;
             border: none;
-            transform: scaleX(-1);
+            scale: {% if horizontal %}-1{% else %}1{% endif %} {% if vertical %}-1{% else %}1{% endif %};
         }
         </style>
     </head>

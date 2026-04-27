@@ -17,19 +17,48 @@ You should have received a copy of the GNU Affero General Public License along
 with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 */
 
-function setFlip(flip) {
-    document.body.style.transform = flip ? "scaleX(-1)" : "";
+let isFlipEnabled = false;
+let isAusFlipEnabled = false;
+
+function updateFlipState() {
+    const transforms = [];
+    if (isFlipEnabled) {
+        transforms.push("scaleX(-1)");
+    }
+    if (isAusFlipEnabled) {
+        transforms.push("scaleY(-1)");
+    }
+    document.body.style.transform = transforms.join(" ");
+
     const links = document.getElementsByTagName("a");
     for (const link of links) {
-        if (flip) {
-            link.href = "/flip?url=" + encodeURIComponent(link.href);
-        } else {
-            const url = new URL(link.href);
-            if (url.pathname === "/flip") {
-                link.href = url.searchParams.get("url");
-            }
+        const originalHref = link.dataset.originalHref || link.href;
+        link.dataset.originalHref = originalHref;
+
+        if (!isFlipEnabled && !isAusFlipEnabled) {
+            link.href = originalHref;
+            continue;
         }
+
+        const params = new URLSearchParams({ url: originalHref });
+        if (isFlipEnabled) {
+            params.set("vertical", "true");
+        }
+        if (isAusFlipEnabled) {
+            params.set("horizontal", "true");
+        }
+        link.href = "/flip?" + params.toString();
     }
+}
+
+function setFlip(flip) {
+    isFlipEnabled = flip;
+    updateFlipState();
+}
+
+function setAusFlip(flip) {
+    isAusFlipEnabled = flip;
+    updateFlipState();
 }
 
 document.getElementsByTagName("a").forEach(a => {
