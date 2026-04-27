@@ -254,6 +254,12 @@ async fn serve_random(
 struct FlipParams {
     /// The URL to embed flipped.
     url: String,
+    /// Whether to flip horizontally (over y-axis)
+    #[serde(default)]
+    horizontal: bool,
+    /// Whether to flip vertically (over x-axis)
+    #[serde(default)]
+    vertical: bool,
 }
 
 /// Serve the `/flip` endpoint.
