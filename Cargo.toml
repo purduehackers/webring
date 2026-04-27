@@ -59,7 +59,7 @@ thiserror = { version = "2.0.12", default-features = false }
 tokio = { version = "1.47.0", features = ["macros", "rt-multi-thread"] }
 toml = { version = "1.0.0", default-features = false, features = ["preserve_order", "parse", "serde", "std"] }
 tower = "0.5.2"
-tower-http = { version = "0.6.6", features = ["cors", "fs", "catch-panic", "trace"] }
+tower-http = { version = "0.6.6", features = ["cors", "fs", "catch-panic", "trace", "set-header"] }
 tracing = "0.1.41"
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.20", features = ["tracing-log"] }

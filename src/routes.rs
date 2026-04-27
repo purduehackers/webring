@@ -38,6 +38,7 @@ use axum::{
     response::{Html, IntoResponse, NoContent, Response},
     routing::get,
 };
+use chrono::Utc;
 use sentry::integrations::tower::{NewSentryLayer, SentryHttpLayer};
 use serde::{Deserialize, Serialize};
 use tera::Tera;
@@ -46,6 +47,7 @@ use tower_http::{
     catch_panic::{CatchPanicLayer, ResponseForPanic},
     cors::{Any, CorsLayer},
     services::ServeDir,
+    set_header::SetResponseHeaderLayer,
     trace::TraceLayer,
 };
 use tracing::warn;
@@ -60,14 +62,29 @@ static FLIP_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_flip_template);
 
 /// Creates a [`Router`] with the routes for our application.
 pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
+    let startup_timestamp_string = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
     Router::new()
         .nest_service(
             "/static",
-            ServeDir::new(static_dir).fallback(HandlerWithoutStateExt::into_service(
-                async |request: Request| -> RouteError {
-                    RouteError::FileNotFound(format!("/static{}", request.uri()))
-                },
-            )),
+            // We must overide the Last-Modified header because it is derived
+            // from the file modification timestamp, but Nix sets all file
+            // modification timestamps to the UNIX epoch. We choose the time at which the server is started, as that's
+            // a good approximation. With the current build system, any time the
+            // static files are updated, the webring service will also be
+            // restarted, so the startup timestamp should always be newer than
+            // the files.
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::LAST_MODIFIED,
+                    HeaderValue::from_str(&startup_timestamp_string).unwrap(),
+                ))
+                .service(
+                    ServeDir::new(static_dir).fallback(HandlerWithoutStateExt::into_service(
+                        async |request: Request| -> RouteError {
+                            RouteError::FileNotFound(format!("/static{}", request.uri()))
+                        },
+                    )),
+                ),
         )
         .route(
             "/healthcheck",
