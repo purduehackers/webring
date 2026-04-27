@@ -42,10 +42,10 @@ function updateFlipState() {
 
         const params = new URLSearchParams({ url: originalHref });
         if (isFlipEnabled) {
-            params.set("vertical", "true");
+            params.set("horizontal", "true");
         }
         if (isAusFlipEnabled) {
-            params.set("horizontal", "true");
+            params.set("vertical", "true");
         }
         link.href = "/flip?" + params.toString();
     }
