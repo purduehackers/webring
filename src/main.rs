@@ -148,7 +148,7 @@ async fn async_main(cli: CliOptions, cfg: Arc<Config>) -> ExitCode {
 
     // Perform site checks every 5 minutes
     {
-        const SITE_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 5);
+        const SITE_CHECK_INTERVAL: Duration = Duration::from_mins(5);
         let webring_for_task = Arc::clone(&webring);
         tokio::spawn(async move {
             loop {
@@ -169,7 +169,7 @@ async fn async_main(cli: CliOptions, cfg: Arc<Config>) -> ExitCode {
             debug_span!("monitor interned objects").in_scope(|| {
                 debug!(count = num_objects_interned(), "interned object count");
             });
-            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+            tokio::time::sleep(Duration::from_hours(1)).await;
         }
     });
 
