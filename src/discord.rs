@@ -35,7 +35,7 @@ use serde_json::json;
 use tracing::{error, instrument, warn};
 
 /// The period within which at most one notification can be sent to each member about their site.
-pub const NOTIFICATION_DEBOUNCE_PERIOD: Duration = Duration::from_secs(60 * 60 * 24); // 24 hours
+pub const NOTIFICATION_DEBOUNCE_PERIOD: Duration = Duration::from_hours(24);
 
 /// A user agent representing our program. [Required by Discord][api-doc-ua].
 ///
