@@ -217,7 +217,7 @@ jobs:
       - name: Check out sources
         uses: actions/checkout@v6
         with:
-          sparse-checkout: ci/ssh
+          sparse-checkout: ci
 
       - name: Configure SSH
         env:
@@ -228,7 +228,17 @@ jobs:
           chmod -R u=rwX,g=,o= ~/.ssh
 
       - name: Build on Vulcan
+        id: build
+        continue-on-error: true
         run: ssh vulcan nix build "github:${{ github.repository }}/${{ github.sha }}"
 
+      - name: Update flake.lock
+        if: steps.build.outcome == 'failure'
+        env:
+          FLAKE_URL: github:${{ github.repository }}/${{ github.sha }}
+          LOCKFILE: /tmp/webring-flake-${{ github.run_id }}-${{ github.run_attempt }}.lock
+        run: ./ci/update-flake-lock.sh
+
       - name: Deploy on Vulcan
+        if: steps.build.outcome == 'success'
         run: ssh vulcan home-manager switch --flake "github:${{ github.repository }}/${{ github.sha }}"
