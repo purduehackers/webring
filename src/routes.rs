@@ -102,7 +102,7 @@ pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
         .route(
             "/debug/panic",
             get(async || -> () {
-                panic!();
+                panic!("intentional panic to showcase public error page");
             }),
         )
         .fallback_service(HandlerWithoutStateExt::into_service(
