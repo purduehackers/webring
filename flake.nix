@@ -61,6 +61,12 @@
           ];
         };
 
+        # Use pinned rust version for deployment
+        rustPlatform = pkgs.makeRustPlatform {
+          rustc = rust;
+          cargo = rust;
+        };
+
         cargo = builtins.fromTOML (builtins.readFile ./Cargo.toml);
       in
       rec {
@@ -81,7 +87,7 @@
           RUSTC_WRAPPER = "sccache";
         };
 
-        packages.phwebring = pkgs.rustPlatform.buildRustPackage {
+        packages.phwebring = rustPlatform.buildRustPackage {
           pname = cargo.package.name;
           version = cargo.package.version;
 
