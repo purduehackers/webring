@@ -237,6 +237,7 @@ jobs:
         env:
           FLAKE_URL: github:${{ github.repository }}/${{ github.sha }}
           LOCKFILE: /tmp/webring-flake-${{ github.run_id }}-${{ github.run_attempt }}.lock
+          GH_TOKEN: ${{ github.token }}
         run: ./ci/update-flake-lock.sh
 
       - name: Deploy on Vulcan
