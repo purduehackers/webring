@@ -213,6 +213,8 @@ jobs:
     concurrency:
       group: deploy-production
       cancel-in-progress: true
+    permissions:
+      pull-requests: write
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
