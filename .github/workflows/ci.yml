@@ -214,6 +214,7 @@ jobs:
       group: deploy-production
       cancel-in-progress: true
     permissions:
+      contents: write
       pull-requests: write
     steps:
       - name: Check out sources
