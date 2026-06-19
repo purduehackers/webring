@@ -14,7 +14,10 @@ scp vulcan:"$LOCKFILE" flake.lock
 git config user.name "github-actions[bot]"
 git config user.email "github-actions[bot]@users.noreply.github.com"
 
+git branch -d update-flake || true
+git switch -c update-flake
+
 git add flake.lock
 git commit -m "chore: update flake.lock"
 
-git push origin master
+gh pr create -B master -H update-flake --title "Update flake.lock" --body "Deployment is broken due to an outdated flake"
