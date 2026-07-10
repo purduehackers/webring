@@ -3,6 +3,8 @@
 
     "extends": ["config:recommended"],
 
+    "enabled": false,
+
     "timezone": "America/Indiana/Indianapolis",
     "automergeType": "branch",
     "dependencyDashboardTitle": "Renovate Dependency Dashboard",
