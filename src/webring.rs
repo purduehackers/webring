@@ -779,7 +779,7 @@ mod tests {
                 cynthia = {{ url = "https://localhost:32751", discord-id = 789, check-level = "online" }}
                 "???" = {{ url = "ws://refuse-the-r.ing", check-level = "none" }}
             "# },
-            static_dir.path().display()
+            static_dir.path().to_string_lossy().escape_default()
         ))
         .unwrap()
     }
@@ -1106,7 +1106,7 @@ mod tests {
             network.listen-addr = "0.0.0.0:3000"
             members.kian = {{ url = "https://kasad.com", check-level = "none" }}
         "# },
-            static_dir.path().display()
+            static_dir.path().to_string_lossy().escape_default()
         )
         .unwrap();
         config_file.flush().unwrap();

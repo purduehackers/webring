@@ -580,6 +580,7 @@ mod tests {
         fs::write(static_dir.path().join("index.html"), "Hello homepage!")
             .await
             .unwrap();
+        
         let config = toml::from_str(&format!(indoc! { r#"
             [webring]
             base-url = "https://ring.purduehackers.com"
@@ -590,7 +591,7 @@ mod tests {
             henry = {{ url = "hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }}
             kian = {{ url = "kasad.com", discord-id = 456, check-level = "none" }}
             ericswpark = {{ url = "https://ericswpark.com", discord-id = 789, check-level = "none" }}
-        "# }, static_dir.path().display())).unwrap();
+        "# }, static_dir.path().to_string_lossy().escape_default())).unwrap();
         let webring = Arc::new(Webring::new(&config));
         let router: Router = create_router(static_dir.path()).with_state(Arc::clone(&webring));
         (router, webring, static_dir)
