@@ -580,8 +580,9 @@ mod tests {
         fs::write(static_dir.path().join("index.html"), "Hello homepage!")
             .await
             .unwrap();
-        
-        let config = toml::from_str(&format!(indoc! { r#"
+
+        let config = toml::from_str(&format!(
+            indoc! { r#"
             [webring]
             base-url = "https://ring.purduehackers.com"
             static-dir = "{}"
@@ -679,10 +680,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            res.headers().get("location").unwrap(),
-            "kasad.com"
-        );
+        assert_eq!(res.headers().get("location").unwrap(), "kasad.com");
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         webring.assert_stat_entry(
             (
