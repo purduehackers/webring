@@ -307,7 +307,7 @@ mod tests {
             },
             discord: Some(DiscordTable {
                 webhook_url: Url::parse("https://api.discord.com/webhook-or-something").unwrap(),
-                channel_id: Snowflake::new(1234567890),
+                channel_id: Snowflake::new(1_234_567_890),
             }),
             members: IndexMap::new(),
         };

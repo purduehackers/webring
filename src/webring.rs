@@ -1252,7 +1252,7 @@ mod tests {
         let notifier = Arc::new(DiscordNotifier::new(
             &server.url("/discord").parse().unwrap(),
         ));
-        let discord_channel_id = Snowflake::new(1234567890);
+        let discord_channel_id = Snowflake::new(1_234_567_890);
         let base_address = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
 
         for (i, &(site_status, should_notify, notify_status, delay)) in sequence.iter().enumerate()

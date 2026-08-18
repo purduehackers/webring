@@ -861,7 +861,7 @@ mod tests {
             prev: LinkStatus::HasTarget,
             prev_path: Some("/previous"),
         };
-        let discord_channel_id = Snowflake::new(1234567890);
+        let discord_channel_id = Snowflake::new(1_234_567_890);
         let expected = formatdoc! {
             r#"
             Your site's webring links have the following issues:
