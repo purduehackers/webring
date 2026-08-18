@@ -45,11 +45,6 @@ use tracing::{error, info, instrument};
 
 use crate::{discord::Snowflake, webring::CheckLevel};
 
-/// Discord ID of the #webring channel
-// TODO: We might want to move this to the config file
-#[allow(clippy::unreadable_literal)]
-const WEBRING_CHANNEL: Snowflake = Snowflake::new(1319140464812753009);
-
 /// The time for which the server is considered online after a successful ping.
 const ONLINE_CHECK_TTL: Duration = Duration::from_secs(1);
 
@@ -266,7 +261,7 @@ impl CheckFailure {
     /// Construct a message suitable for the site owner about the given check failure. For
     /// a shorter message format suitable for debugging/logging, use the [`Display`] trait.
     #[must_use]
-    pub fn to_message(&self) -> String {
+    pub fn to_message(&self, discord_channel_id: Snowflake) -> String {
         match self {
             CheckFailure::Connection(err) => format!("Connection to your site failed: {err}"),
             CheckFailure::ResponseStatus(status_code) => {
@@ -279,7 +274,7 @@ impl CheckFailure {
                 }
                 msg
             }
-            CheckFailure::LinkIssues(issues) => issues.to_message(),
+            CheckFailure::LinkIssues(issues) => issues.to_message(discord_channel_id),
             CheckFailure::IOError(err) => {
                 format!("There was an IO error while reading the body of your site: {err}")
             }
@@ -412,7 +407,7 @@ impl LinkStatuses {
 
     /// Construct a message suitable for the site owner about the given link issues. For
     /// a shorter message format suitable for debugging/logging, use the [`Display`] trait.
-    fn to_message(&self) -> String {
+    fn to_message(&self, discord_channel_id: Snowflake) -> String {
         let mut msg = String::new();
         let address_string = self.base_address.to_string();
         let address = address_string.strip_suffix('/').unwrap_or(&address_string);
@@ -452,7 +447,7 @@ impl LinkStatuses {
         }
         writeln!(
             &mut msg,
-            "- If you think this alert is in error, send a message in <#{WEBRING_CHANNEL}>."
+            "- If you think this alert is in error, send a message in <#{discord_channel_id}>."
         )
         .unwrap();
         msg
@@ -606,10 +601,10 @@ mod tests {
     use reqwest::StatusCode;
     use sarlacc::Intern;
 
-    use crate::checking::REQUEST_TIMEOUT;
+    use crate::{checking::REQUEST_TIMEOUT, discord::Snowflake};
 
     use super::{
-        CheckFailure, CheckLevel, LinkStatus, LinkStatuses, WEBRING_CHANNEL, check, scan_for_links,
+        CheckFailure, CheckLevel, LinkStatus, LinkStatuses, check, scan_for_links,
     };
 
     async fn assert_links_gives(
@@ -866,6 +861,7 @@ mod tests {
             prev: LinkStatus::HasTarget,
             prev_path: Some("/previous"),
         };
+        let discord_channel_id = Snowflake::new(1234567890);
         let expected = formatdoc! {
             r#"
             Your site's webring links have the following issues:
@@ -876,10 +872,10 @@ mod tests {
             - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
             - If you don't use anchor tags for the links, add the attribute `data-phwebring="prev"|"home"|"next"` to the link elements.
             - Don't include a `target` attribute on the links.
-            - If you think this alert is in error, send a message in <#{WEBRING_CHANNEL}>.
+            - If you think this alert is in error, send a message in <#{discord_channel_id}>.
             "#
         };
-        assert_eq!(expected, links.to_message());
+        assert_eq!(expected, links.to_message(discord_channel_id));
 
         let links = LinkStatuses {
             base_address: Intern::new(Uri::from_static("https://ring.purduehackers.com")),
@@ -895,10 +891,10 @@ mod tests {
 
             What to do:
             - Don't include a `target` attribute on the links.
-            - If you think this alert is in error, send a message in <#{WEBRING_CHANNEL}>.
+            - If you think this alert is in error, send a message in <#{discord_channel_id}>.
             "#
         };
-        assert_eq!(expected, links.to_message());
+        assert_eq!(expected, links.to_message(discord_channel_id));
 
         let links = LinkStatuses {
             base_address: Intern::new(Uri::from_static("https://ring.purduehackers.com")),
@@ -916,10 +912,10 @@ mod tests {
             What to do:
             - If your webpage is rendered client-side, ask the administrators to set the validator to only check for your site being online.
             - If you don't use anchor tags for the links, add the attribute `data-phwebring="prev"|"home"|"next"` to the link elements.
-            - If you think this alert is in error, send a message in <#{WEBRING_CHANNEL}>.
+            - If you think this alert is in error, send a message in <#{discord_channel_id}>.
             "#
         };
-        assert_eq!(expected, links.to_message());
+        assert_eq!(expected, links.to_message(discord_channel_id));
     }
 
     #[tokio::test]

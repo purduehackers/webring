@@ -127,6 +127,7 @@ impl Member {
         &self,
         base_address: Intern<Uri>,
         notifier: Option<Arc<DiscordNotifier>>,
+        discord_channel_id: Option<Snowflake>,
     ) -> impl Future<Output = Option<JoinHandle<()>>> + Send + 'static {
         tracing::Span::current().record("site", display(&self.website));
 
@@ -146,7 +147,7 @@ impl Member {
             debug!(site = %website, ?check_result, "got check result for member site");
             if let Some(failure) = check_result {
                 successful.store(false, Ordering::Relaxed);
-                if let (Some(notifier), Some(user_id)) = (notifier, discord_id_for_block) {
+                if let (Some(notifier), Some(user_id), Some(discord_channel_id)) = (notifier, discord_id_for_block, discord_channel_id) {
                     // Notifications are enabled. Send notification asynchronously.
                     Some(tokio::spawn(async move {
                         // If the last notification was sent more than a day
@@ -155,7 +156,7 @@ impl Member {
                         if last_notified.is_none_or(|last| {
                             Instant::now().duration_since(last) > NOTIFICATION_DEBOUNCE_PERIOD
                         }) {
-                            let message = format!("<@{}> {}", user_id, failure.to_message());
+                            let message = format!("<@{}> {}", user_id, failure.to_message(discord_channel_id));
                             if notifier.send_message(Some(user_id), &message).await.is_ok() {
                                 *last_notified = Some(Instant::now());
                             }
@@ -208,6 +209,8 @@ pub struct Webring {
     base_authority: Intern<Authority>,
     /// Discord notifier for notifying members of issues with their sites
     notifier: Option<Arc<DiscordNotifier>>,
+    /// Discord channel ID to send notifications to
+    discord_channel_id: Option<Snowflake>,
     /// Statistics collected about the ring
     stats: Arc<Stats>,
     /// Current configuration of the webring, used for detecting changes when reloading
@@ -233,6 +236,10 @@ impl Webring {
                 .map(|dt| &dt.webhook_url)
                 .map(DiscordNotifier::new)
                 .map(Arc::new),
+            discord_channel_id: config
+                .discord
+                .as_ref()
+                .map(|dt| dt.channel_id),
             base_authority: Intern::from_ref(config.webring.base_url().authority().unwrap()),
             config: Arc::new(AsyncRwLock::new(Some(config.clone()))),
         }
@@ -257,6 +264,7 @@ impl Webring {
                             tasks.push(new_member.check_and_store_and_optionally_notify(
                                 self.base_address,
                                 self.notifier.as_ref().map(Arc::clone),
+                                self.discord_channel_id,
                             ));
                         }
                     }
@@ -264,6 +272,7 @@ impl Webring {
                         tasks.push(new_member.check_and_store_and_optionally_notify(
                             self.base_address,
                             self.notifier.as_ref().map(Arc::clone),
+                            self.discord_channel_id,
                         ));
                     }
                 }
@@ -290,6 +299,7 @@ impl Webring {
                 member.check_and_store_and_optionally_notify(
                     self.base_address,
                     self.notifier.as_ref().map(Arc::clone),
+                    self.discord_channel_id
                 )
             })
             .collect::<FuturesUnordered<_>>();
@@ -713,6 +723,7 @@ mod tests {
                 base_address: Intern::default(),
                 base_authority: Intern::new("ring.purduehackers.com".parse().unwrap()),
                 notifier: None,
+                discord_channel_id: None,
                 stats: Arc::default(),
                 config: Arc::new(AsyncRwLock::new(None)),
             }
@@ -1241,6 +1252,7 @@ mod tests {
         let notifier = Arc::new(DiscordNotifier::new(
             &server.url("/discord").parse().unwrap(),
         ));
+        let discord_channel_id = Snowflake::new(1234567890);
         let base_address = Intern::new(Uri::from_static("https://ring.purduehackers.com"));
 
         for (i, &(site_status, should_notify, notify_status, delay)) in sequence.iter().enumerate()
@@ -1267,7 +1279,7 @@ mod tests {
 
             // Perform check
             let maybe_notification_task = member
-                .check_and_store_and_optionally_notify(base_address, Some(Arc::clone(&notifier)))
+                .check_and_store_and_optionally_notify(base_address, Some(Arc::clone(&notifier)), Some(discord_channel_id))
                 .await;
             if let Some(notification_task) = maybe_notification_task {
                 // Wait for the notification task to complete

@@ -123,6 +123,9 @@ pub struct DiscordTable {
     /// Discord webhook URL
     #[serde(deserialize_with = "deserialize_url")]
     pub webhook_url: Url,
+
+    /// Discord channel ID to send notifications to
+    pub channel_id: Snowflake,
 }
 
 /// Describes a webring member
@@ -285,6 +288,7 @@ mod tests {
 
             [discord]
             webhook-url = "https://api.discord.com/webhook-or-something"
+            channel-id = 1234567890
         "# };
         let actual: Config =
             toml::from_str(config).expect("Expected parsing configuration to succeed");
@@ -303,6 +307,7 @@ mod tests {
             },
             discord: Some(DiscordTable {
                 webhook_url: Url::parse("https://api.discord.com/webhook-or-something").unwrap(),
+                channel_id: Snowflake::new(1234567890),
             }),
             members: IndexMap::new(),
         };
@@ -380,6 +385,7 @@ mod tests {
             static-dir = "static"
             [discord]
             webhook-url = "https://api.discord.com/webhook-or-something"
+            channel-id = 1234567890
         "# };
         let result = toml::from_str::<Config>(config);
         assert!(result.is_err());
