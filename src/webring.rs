@@ -147,7 +147,9 @@ impl Member {
             debug!(site = %website, ?check_result, "got check result for member site");
             if let Some(failure) = check_result {
                 successful.store(false, Ordering::Relaxed);
-                if let (Some(notifier), Some(user_id), Some(discord_channel_id)) = (notifier, discord_id_for_block, discord_channel_id) {
+                if let (Some(notifier), Some(user_id), Some(discord_channel_id)) =
+                    (notifier, discord_id_for_block, discord_channel_id)
+                {
                     // Notifications are enabled. Send notification asynchronously.
                     Some(tokio::spawn(async move {
                         // If the last notification was sent more than a day
@@ -156,7 +158,11 @@ impl Member {
                         if last_notified.is_none_or(|last| {
                             Instant::now().duration_since(last) > NOTIFICATION_DEBOUNCE_PERIOD
                         }) {
-                            let message = format!("<@{}> {}", user_id, failure.to_message(discord_channel_id));
+                            let message = format!(
+                                "<@{}> {}",
+                                user_id,
+                                failure.to_message(discord_channel_id)
+                            );
                             if notifier.send_message(Some(user_id), &message).await.is_ok() {
                                 *last_notified = Some(Instant::now());
                             }
@@ -236,10 +242,7 @@ impl Webring {
                 .map(|dt| &dt.webhook_url)
                 .map(DiscordNotifier::new)
                 .map(Arc::new),
-            discord_channel_id: config
-                .discord
-                .as_ref()
-                .map(|dt| dt.channel_id),
+            discord_channel_id: config.discord.as_ref().map(|dt| dt.channel_id),
             base_authority: Intern::from_ref(config.webring.base_url().authority().unwrap()),
             config: Arc::new(AsyncRwLock::new(Some(config.clone()))),
         }
@@ -299,7 +302,7 @@ impl Webring {
                 member.check_and_store_and_optionally_notify(
                     self.base_address,
                     self.notifier.as_ref().map(Arc::clone),
-                    self.discord_channel_id
+                    self.discord_channel_id,
                 )
             })
             .collect::<FuturesUnordered<_>>();
@@ -1279,7 +1282,11 @@ mod tests {
 
             // Perform check
             let maybe_notification_task = member
-                .check_and_store_and_optionally_notify(base_address, Some(Arc::clone(&notifier)), Some(discord_channel_id))
+                .check_and_store_and_optionally_notify(
+                    base_address,
+                    Some(Arc::clone(&notifier)),
+                    Some(discord_channel_id),
+                )
                 .await;
             if let Some(notification_task) = maybe_notification_task {
                 // Wait for the notification task to complete

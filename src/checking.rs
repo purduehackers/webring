@@ -603,9 +603,7 @@ mod tests {
 
     use crate::{checking::REQUEST_TIMEOUT, discord::Snowflake};
 
-    use super::{
-        CheckFailure, CheckLevel, LinkStatus, LinkStatuses, check, scan_for_links,
-    };
+    use super::{CheckFailure, CheckLevel, LinkStatus, LinkStatuses, check, scan_for_links};
 
     async fn assert_links_gives(
         base_address: &'static str,
