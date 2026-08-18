@@ -580,7 +580,9 @@ mod tests {
         fs::write(static_dir.path().join("index.html"), "Hello homepage!")
             .await
             .unwrap();
-        let config = toml::from_str(&format!(indoc! { r#"
+
+        let config = toml::from_str(&format!(
+            indoc! { r#"
             [webring]
             base-url = "https://ring.purduehackers.com"
             static-dir = "{}"
@@ -589,9 +591,8 @@ mod tests {
             [members]
             henry = {{ url = "hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }}
             kian = {{ url = "kasad.com", discord-id = 456, check-level = "none" }}
-            cynthia = {{ url = "https://clementine.viridian.page", discord-id = 789, check-level = "none" }}
-            "???" = {{ url = "ws://refuse-the-r.ing", check-level = "none" }}
-        "# }, static_dir.path().display())).unwrap();
+            ericswpark = {{ url = "https://ericswpark.com", discord-id = 789, check-level = "none" }}
+        "# }, static_dir.path().to_string_lossy().escape_default())).unwrap();
         let webring = Arc::new(Webring::new(&config));
         let router: Router = create_router(static_dir.path()).with_state(Arc::clone(&webring));
         (router, webring, static_dir)
@@ -672,23 +673,20 @@ mod tests {
         let res = router
             .oneshot(
                 Request::builder()
-                    .uri("/visit?member=clementine.viridian.page")
+                    .uri("/visit?member=kasad.com")
                     .extension(ConnectInfo("5.4.3.2:80".parse::<SocketAddr>().unwrap()))
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(
-            res.headers().get("location").unwrap(),
-            "https://clementine.viridian.page/"
-        );
+        assert_eq!(res.headers().get("location").unwrap(), "kasad.com");
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         webring.assert_stat_entry(
             (
                 today,
                 "ring.purduehackers.com",
-                "clementine.viridian.page",
+                "kasad.com",
                 "ring.purduehackers.com",
             ),
             1,
@@ -723,7 +721,7 @@ mod tests {
         let res = router
             .oneshot(
                 Request::builder()
-                    .uri("/next?host=clementine.viridian.page")
+                    .uri("/next?host=kasad.com")
                     .extension(ConnectInfo("5.4.3.2:80".parse::<SocketAddr>().unwrap()))
                     .body(Body::empty())
                     .unwrap(),
@@ -732,7 +730,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             res.headers().get("location").unwrap(),
-            "ws://refuse-the-r.ing/"
+            "https://ericswpark.com/"
         );
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
@@ -746,7 +744,7 @@ mod tests {
         let res = router
             .oneshot(
                 Request::builder()
-                    .uri("/prev?host=https://clementine.viridian.page")
+                    .uri("/prev?host=https://ericswpark.com")
                     .header("Referer", "kasad.com")
                     .extension(ConnectInfo("5.4.3.2:80".parse::<SocketAddr>().unwrap()))
                     .body(Body::empty())
