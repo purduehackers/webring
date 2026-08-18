@@ -38,6 +38,8 @@ use axum::{
     response::{Html, IntoResponse, NoContent, Response},
     routing::get,
 };
+use axum_prometheus::PrometheusMetricLayer;
+use axum_reverse_proxy::ReverseProxy;
 use chrono::Utc;
 use sentry::integrations::tower::{NewSentryLayer, SentryHttpLayer};
 use serde::{Deserialize, Serialize};
@@ -63,6 +65,9 @@ static FLIP_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_flip_template);
 /// Creates a [`Router`] with the routes for our application.
 pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
     let startup_timestamp_string = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+
+    let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
+
     Router::new()
         .nest_service(
             "/static",
@@ -105,6 +110,11 @@ pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
                 panic!("intentional panic to showcase public error page");
             }),
         )
+        .route("/metrics", get(|| async move { metric_handle.render() }))
+        .merge(ReverseProxy::new(
+            "/grafana",
+            "http://localhost:3001/grafana",
+        ))
         .fallback_service(HandlerWithoutStateExt::into_service(
             async |request: Request| -> RouteError {
                 RouteError::NoRoute(request.uri().to_owned())
@@ -115,7 +125,8 @@ pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
                 .layer(NewSentryLayer::new_from_top())
                 .layer(SentryHttpLayer::new().enable_transaction().enable_pii())
                 .layer(CatchPanicLayer::custom(PanicResponse))
-                .layer(TraceLayer::new_for_http()),
+                .layer(TraceLayer::new_for_http())
+                .layer(prometheus_layer),
         )
 }
 

@@ -68,23 +68,29 @@
         };
 
         cargo = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+
+        infra = with pkgs; [
+          prometheus
+          grafana
+        ];
       in
       rec {
         devShell = pkgs.mkShell {
-          buildInputs =
-            [
-              rust
-            ]
-            ++ (with pkgs; [
-              pkg-config
-              rust-analyzer
-              sccache
-              openssl.dev
-            ]);
+          buildInputs = [
+            rust
+          ]
+          ++ infra
+          ++ (with pkgs; [
+            pkg-config
+            rust-analyzer
+            sccache
+            openssl.dev
+          ]);
 
           PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
           RUST_BACKTRACE = 1;
           RUSTC_WRAPPER = "sccache";
+          DEPLOY = deployBwrap;
         };
 
         packages.phwebring = rustPlatform.buildRustPackage {
@@ -118,6 +124,38 @@
 
         defaultPackage = packages.phwebring;
 
+        deployScript = pkgs.writeShellScript "deploy.sh" ''
+            ${pkgs.prometheus}/bin/prometheus --config.file ${./prometheus.yml} &
+
+            if [ ! -d grafana ]; then
+              mkdir grafana
+            fi
+
+            ln -sfT ${./static} ./static
+            ln -sf ${pkgs.grafana}/share/grafana/public grafana
+            ln -sf ${pkgs.grafana}/share/grafana/conf grafana
+            
+            ${pkgs.grafana}/bin/grafana server --homepath grafana --config ${./grafana.ini} &
+
+            ${packages.phwebring}/bin/ph-webring
+          '';
+
+        deployBwrap = pkgs.writeShellScript "deployBwrap.sh" ''
+            ${pkgs.bubblewrap}/bin/bwrap \
+              --bind $DATA_DIR /webring \
+              --ro-bind /nix/store /nix/store \
+              --ro-bind /etc /etc \
+              --tmpfs /tmp \
+              --unshare-all \
+              --share-net \
+              --new-session \
+              --chdir /webring \
+              --uid 256 \
+              --gid 512 \
+              --die-with-parent \
+              ${deployScript}
+          '';
+
         packages.homeConfigurations."ring" = home-manager.lib.homeManagerConfiguration {
           inherit pkgs;
 
@@ -127,16 +165,15 @@
               home.homeDirectory = "/home/ring";
               home.stateVersion = "24.11";
 
-              home.packages = [ packages.phwebring ];
-
-              home.file."webring-data/static".source = ./static;
+              home.packages = [ packages.phwebring ] ++ infra;
 
               # This will automatically get restarted when rebuilding the home directory
               systemd.user.services.phwebring = {
                 Unit.Description = "Purdue Hackers webring";
 
                 Service = {
-                  ExecStart = "${pkgs.bubblewrap}/bin/bwrap --bind /home/ring/webring-data /webring --ro-bind /nix/store /nix/store --ro-bind /etc /etc --tmpfs /tmp --unshare-all --share-net --new-session --chdir /webring --uid 256 --gid 512 --die-with-parent ${packages.phwebring}/bin/ph-webring";
+                  Environment = "DATA_DIR=/home/ring/webring-data";
+                  ExecStart = deployBwrap;
 
                   Restart = "on-failure";
                   Type = "exec";
