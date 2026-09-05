@@ -67,15 +67,22 @@ This table contains settings pertaining to the webring server.
 
 | Key          | Required | Type          | Default                          |
 | ---          | ---      | ---           | ---                              |
-| `base-url`   | no       | string (URL)  | `https://ring.purduehackers.com` |
-| `static-dir` | yes      | string (path) | none                             |
+| `base-url`                  | no       | string (URL)  | `https://ring.purduehackers.com` |
+| `static-dir`                | yes      | string (path) | none                             |
+| `preview-revalidation-period` | no       | integer (seconds) | `86400`                      |
 
 Example:
 ```toml
 [webring]
 base-url = "https://ring.purduehackers.com"
 static-dir = "static"
+preview-revalidation-period = 86400
 ```
+
+#### `preview-revalidation-period`
+
+The number of seconds a cached member screenshot may be served before it is
+regenerated in the background. The default is one day (`86400`).
 
 #### `base-url`
 

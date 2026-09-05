@@ -18,6 +18,7 @@
 [package]
 name = "ph-webring"
 version = "0.0.0"
+default-run = "ph-webring"
 description = "Purdue Hackers' webring server"
 repository = "https://github.com/purduehackers/webring"
 homepage = "https://ring.purduehackers.com"

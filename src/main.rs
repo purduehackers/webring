@@ -43,6 +43,7 @@ mod config;
 mod discord;
 mod homepage;
 mod routes;
+mod site_previews;
 mod stats;
 mod webring;
 
@@ -145,6 +146,7 @@ async fn async_main(cli: CliOptions, cfg: Arc<Config>) -> ExitCode {
 
     // Create webring data structure
     let webring = Arc::new(Webring::new(&cfg));
+    webring.enable_preview_regeneration();
 
     // Perform site checks every 5 minutes
     {
