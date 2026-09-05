@@ -65,6 +65,10 @@ pub struct WebringTable {
     #[serde(default = "default_static_dir")]
     pub static_dir: PathBuf,
 
+    /// Directory in which cache files will bve stored
+    #[serde(default = "default_cache_dir")]
+    pub cache_dir: PathBuf,
+
     /// Base URL of the webring, e.g. `https://ring.purduehackers.com`
     ///
     /// It is guaranteed to have a valid host/authority component
@@ -73,6 +77,10 @@ pub struct WebringTable {
         deserialize_with = "deserialize_interned_uri"
     )]
     base_url: Intern<Uri>,
+
+    /// Number of seconds between member screenshot revalidations.
+    #[serde(default = "default_preview_revalidation_period")]
+    pub preview_revalidation_period: u64,
 }
 
 /// Returns the default static directory
@@ -80,11 +88,18 @@ fn default_static_dir() -> PathBuf {
     PathBuf::from("/usr/share/webring/static")
 }
 
+/// Returns the default cache directory
+fn default_cache_dir() -> PathBuf {
+    PathBuf::from("/var/cache/webring")
+}
+
 impl Default for WebringTable {
     fn default() -> Self {
         Self {
             static_dir: default_static_dir(),
+            cache_dir: default_cache_dir(),
             base_url: default_address(),
+            preview_revalidation_period: default_preview_revalidation_period(),
         }
     }
 }
@@ -232,6 +247,11 @@ where
     LevelFilterWrapper::deserialize(deserializer).map(LevelFilter::from)
 }
 
+/// Get the default screenshot revalidation period in seconds.
+fn default_preview_revalidation_period() -> u64 {
+    24 * 60 * 60
+}
+
 /// Get default webring base address.
 fn default_address() -> Intern<Uri> {
     Intern::new(Uri::from_static(env!("CARGO_PKG_HOMEPAGE")))
@@ -310,6 +330,7 @@ mod tests {
         let config = indoc! { r#"
             [webring]
             static-dir = "static"
+            cache-dir = "cache"
             base-url = "https://ring.purduehackers.com"
 
             [network]
@@ -328,6 +349,8 @@ mod tests {
         let expected = Config {
             webring: WebringTable {
                 static_dir: PathBuf::from("static"),
+                cache_dir: PathBuf::from("cache"),
+                preview_revalidation_period: 24 * 60 * 60,
                 base_url: Intern::new(Uri::from_static("https://ring.purduehackers.com/")),
             },
             network: NetworkTable {
@@ -360,6 +383,20 @@ mod tests {
             "https://ring.purduehackers.com/",
             &actual.webring.base_url.to_string()
         );
+        assert_eq!(24 * 60 * 60, actual.webring.preview_revalidation_period);
+    }
+
+    #[test]
+    fn configured_preview_revalidation_period() {
+        let config = indoc! { r#"
+            [webring]
+            static-dir = "static"
+            preview-revalidation-period = 123
+            [network]
+            listen-addr = "0.0.0.0:3000"
+        "# };
+        let actual: Config = toml::from_str(config).unwrap();
+        assert_eq!(123, actual.webring.preview_revalidation_period);
     }
 
     #[test]
@@ -424,6 +461,10 @@ mod tests {
             actual.webring.static_dir.as_path(),
             Path::new("/usr/share/webring/static")
         );
+        assert_eq!(
+            actual.webring.cache_dir.as_path(),
+            Path::new("/var/cache/webring")
+        );
     }
 
     #[test]
@@ -440,7 +481,7 @@ mod tests {
         let result = toml::from_str::<Config>(config);
         assert!(result.is_err());
         assert_eq!(
-            "unknown field `extra-field`, expected `static-dir` or `base-url`",
+            "unknown field `extra-field`, expected one of `static-dir`, `cache-dir`, `base-url`, `preview-revalidation-period`",
             result.unwrap_err().message()
         );
     }
