@@ -17,6 +17,7 @@
 
 [webring]
 base-url = "https://ring.purduehackers.com"
+preview-revalidation-period = 86400
 
 [logging]
 verbosity = "info"

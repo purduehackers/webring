@@ -68,12 +68,34 @@ impl Homepage {
 pub struct MemberForHomepage {
     /// Member's name
     pub name: String,
+    /// Stable filename stem for the generated website screenshot
+    pub preview_id: String,
     /// Member's website URI
     pub website: SerializableUri,
     /// Whether the member's website check was successful
     pub check_successful: bool,
     /// Member's enrollment status
     pub enrollment: EnrollmentStatus,
+}
+
+/// Return a filesystem-safe, stable identifier for a member preview.
+pub fn preview_id(name: &str) -> String {
+    let id: String = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    if id.is_empty() {
+        "member".to_owned()
+    } else {
+        id
+    }
 }
 
 /// Contains the information about a URI that we care about while also implementing `Serialize`
@@ -139,12 +161,14 @@ mod tests {
         let members = vec![
             MemberForHomepage {
                 name: s("kian"),
+                preview_id: s("kian"),
                 website: u("https://kasad.com/"),
                 check_successful: true,
                 enrollment: EnrollmentStatus::Student,
             },
             MemberForHomepage {
                 name: s("henry"),
+                preview_id: s("henry"),
                 website: u("hrovnyak.gitlab.io"),
                 check_successful: true,
                 enrollment: EnrollmentStatus::Alum,

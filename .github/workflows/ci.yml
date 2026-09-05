@@ -81,7 +81,7 @@ jobs:
           echo "PATH=$(pwd)/node_modules/.bin:$PATH" >> $GITHUB_ENV
 
       - name: Lint UI code
-        run: prettier --check --config .prettierrc static
+        run: prettier --check --config .prettierrc .
 
   fmt:
     name: Check formatting
