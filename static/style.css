@@ -401,6 +401,7 @@ main {
 .list-heading-row {
     display: flex;
     align-items: baseline;
+
     justify-content: space-between;
     gap: 16px;
     padding-bottom: 10px;
@@ -410,6 +411,7 @@ main {
 }
 
 .list-heading-row h2 {
+    margin-bottom:0;
     font-style: bold;
 }
 .list-heading-row span {
@@ -434,7 +436,7 @@ main {
     min-height: 46px;
     margin-inline: -12px;
     padding: 12px;
-    border-top: 2px dashed rgb(0 0 0 / 18%);
+    border-top: 1px dashed rgb(0 0 0 / 18%);
     color: var(--ink);
     text-decoration: none;
     transition: background-color 150ms ease;

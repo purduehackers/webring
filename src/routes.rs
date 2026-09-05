@@ -32,7 +32,7 @@ use std::{
 use axum::{
     Router,
     body::Body,
-    extract::{ConnectInfo, Query, Request, State},
+    extract::{ConnectInfo, Path as AxumPath, Query, Request, State},
     handler::HandlerWithoutStateExt,
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header, uri::InvalidUri},
     response::{Html, IntoResponse, NoContent, Response},
@@ -91,6 +91,7 @@ pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
             get(async || NoContent).layer(CorsLayer::new().allow_origin(Any)),
         )
         .route("/", get(serve_index))
+        .route("/preview/{member}", get(serve_preview))
         .route("/visit", get(serve_visit))
         .route("/next", get(serve_next))
         // Support /prev and /previous as aliases of each other
@@ -157,6 +158,30 @@ async fn serve_index(
     let maybe_origin = get_origin_from_request(headers, params).ok();
     webring.track_to_homepage_click(maybe_origin.as_ref(), addr.ip());
     Ok(Html(webring.homepage().await?.to_html().to_owned()).into_response())
+}
+
+/// Serve a cached member website screenshot.
+async fn serve_preview(
+    State(webring): State<Arc<Webring>>,
+    AxumPath(member): AxumPath<String>,
+) -> Response {
+    let Some(bytes) = webring.preview(&member) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let revalidation_period = webring.preview_revalidation_period().as_secs();
+    let mut response = Response::new(Body::from(bytes.as_ref().to_vec()));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_str(&format!(
+            "public, max-age={revalidation_period}, stale-while-revalidate={revalidation_period}",
+        ))
+        .unwrap(),
+    );
+    response
 }
 
 /// Serve the `/visit` endpoint
@@ -660,6 +685,55 @@ mod tests {
             ),
             1,
         );
+
+        drop(tmpfiles);
+    }
+
+    #[tokio::test]
+    async fn preview() {
+        let (router, webring, tmpfiles) = app().await;
+        webring.cache_preview_for_test("kian", b"fake-png");
+
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/preview/kian")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(header::CONTENT_TYPE).unwrap(),
+            "image/png"
+        );
+        assert_eq!(
+            res.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=86400, stale-while-revalidate=86400"
+        );
+        assert_eq!(
+            res.into_body().collect().await.unwrap().to_bytes().as_ref(),
+            b"fake-png"
+        );
+
+        drop(tmpfiles);
+    }
+
+    #[tokio::test]
+    async fn preview_unknown_member() {
+        let (router, _, tmpfiles) = app().await;
+
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/preview/unknown")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
         drop(tmpfiles);
     }

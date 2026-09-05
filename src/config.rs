@@ -62,6 +62,10 @@ pub struct WebringTable {
     /// Directory from which to serve static content
     pub static_dir: PathBuf,
 
+    /// Number of seconds between member screenshot revalidations.
+    #[serde(default = "default_preview_revalidation_period")]
+    pub preview_revalidation_period: u64,
+
     /// Base URL of the webring, e.g. `https://ring.purduehackers.com`
     ///
     /// It is guaranteed to have a valid host/authority component
@@ -201,6 +205,11 @@ where
     LevelFilterWrapper::deserialize(deserializer).map(LevelFilter::from)
 }
 
+/// Get the default screenshot revalidation period in seconds.
+fn default_preview_revalidation_period() -> u64 {
+    24 * 60 * 60
+}
+
 /// Get default webring base address.
 fn default_address() -> Intern<Uri> {
     Intern::new(Uri::from_static(env!("CARGO_PKG_HOMEPAGE")))
@@ -295,6 +304,7 @@ mod tests {
         let expected = Config {
             webring: WebringTable {
                 static_dir: PathBuf::from("static"),
+                preview_revalidation_period: 24 * 60 * 60,
                 base_url: Intern::new(Uri::from_static("https://ring.purduehackers.com/")),
             },
             network: NetworkTable {
@@ -327,6 +337,20 @@ mod tests {
             "https://ring.purduehackers.com/",
             &actual.webring.base_url.to_string()
         );
+        assert_eq!(24 * 60 * 60, actual.webring.preview_revalidation_period);
+    }
+
+    #[test]
+    fn configured_preview_revalidation_period() {
+        let config = indoc! { r#"
+            [webring]
+            static-dir = "static"
+            preview-revalidation-period = 123
+            [network]
+            listen-addr = "0.0.0.0:3000"
+        "# };
+        let actual: Config = toml::from_str(config).unwrap();
+        assert_eq!(123, actual.webring.preview_revalidation_period);
     }
 
     #[test]
@@ -406,7 +430,7 @@ mod tests {
         let result = toml::from_str::<Config>(config);
         assert!(result.is_err());
         assert_eq!(
-            "unknown field `extra-field`, expected `static-dir` or `base-url`",
+            "unknown field `extra-field`, expected one of `static-dir`, `preview-revalidation-period`, `base-url`",
             result.unwrap_err().message()
         );
     }

@@ -18,6 +18,7 @@
 [webring]
 static-dir = "static"
 base-url = "https://ring.purduehackers.com"
+preview-revalidation-period = 86400
 
 [network]
 listen-addr = "0.0.0.0:3000"

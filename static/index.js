@@ -63,7 +63,7 @@ function setAusFlip(flip) {
 }
 
 function initOutboundLinkTracking() {
-    document.querySelectorAll("a").forEach((link) => {
+    document.querySelectorAll("a").forEach(link => {
         if (link.host !== window.location.host && !link.dataset.umamiEvent) {
             link.setAttribute("data-umami-event", "outbound-link-click");
             link.setAttribute("data-umami-event-url", link.href);
@@ -72,13 +72,13 @@ function initOutboundLinkTracking() {
 }
 
 function initListPreviewCursor() {
-    document.querySelectorAll(".member-list-row").forEach((row) => {
+    document.querySelectorAll(".member-list-row").forEach(row => {
         const preview = row.querySelector(".member-list-preview");
         if (!preview) {
             return;
         }
 
-        row.addEventListener("pointermove", (event) => {
+        row.addEventListener("pointermove", event => {
             if (event.pointerType && event.pointerType !== "mouse") {
                 return;
             }
@@ -90,7 +90,9 @@ function initListPreviewCursor() {
 
 function initViewToggle() {
     const buttons = Array.from(document.querySelectorAll(".view-toggle-button"));
-    const panels = Array.from(document.querySelectorAll("[data-view-panel], #carousel-view, #list-view"));
+    const panels = Array.from(
+        document.querySelectorAll("[data-view-panel], #carousel-view, #list-view"),
+    );
     if (!buttons.length || !panels.length) {
         return;
     }
@@ -108,12 +110,12 @@ function initViewToggle() {
     function setView(view, animate = true) {
         const nextView = view === "list" ? "list" : "carousel";
         const nextPanel = document.getElementById(`${nextView}-view`);
-        const currentPanel = panels.find((panel) => !panel.hidden);
+        const currentPanel = panels.find(panel => !panel.hidden);
         if (!nextPanel) {
             return;
         }
 
-        buttons.forEach((button) => {
+        buttons.forEach(button => {
             button.setAttribute("aria-pressed", String(button.dataset.view === nextView));
         });
         try {
@@ -124,10 +126,10 @@ function initViewToggle() {
 
         window.clearTimeout(transitionTimer);
         document.body.classList.remove("view-switching");
-        panels.forEach((panel) => panel.classList.remove("is-entering", "is-leaving"));
+        panels.forEach(panel => panel.classList.remove("is-entering", "is-leaving"));
 
         if (!animate || !currentPanel || currentPanel === nextPanel) {
-            panels.forEach((panel) => {
+            panels.forEach(panel => {
                 panel.hidden = panel !== nextPanel;
             });
         } else {
@@ -143,10 +145,9 @@ function initViewToggle() {
                 document.body.classList.remove("view-switching");
             }, VIEW_SWITCH_DURATION);
         }
-
     }
 
-    buttons.forEach((button) => {
+    buttons.forEach(button => {
         button.addEventListener("click", () => setView(button.dataset.view));
     });
     setView(savedView, false);
@@ -170,8 +171,7 @@ function initCarousel() {
     let prevTranslate = 0;
     let animationFrameId = null;
     let suppressClick = false;
-    let wheelTimeout;  // debounce timer for wheel snapping
-
+    let wheelTimeout; // debounce timer for wheel snapping
 
     function memberName(slide) {
         return slide.querySelector(".preview-frame")?.dataset.umamiEventName || "";
@@ -224,7 +224,7 @@ function initCarousel() {
         return Math.min(Math.max(value, min), max);
     }
 
-    carousel?.addEventListener("pointerdown", (event) => {
+    carousel?.addEventListener("pointerdown", event => {
         pointerStartX = event.clientX;
         pointerCurrentX = pointerStartX;
         isDragging = true;
@@ -237,14 +237,18 @@ function initCarousel() {
         animationFrameId = requestAnimationFrame(animation);
     });
 
-    carousel?.addEventListener("pointermove", (event) => {
+    carousel?.addEventListener("pointermove", event => {
         if (!isDragging) return;
         pointerCurrentX = event.clientX;
         const deltaX = pointerCurrentX - pointerStartX;
-        currentTranslate = clamp(prevTranslate + deltaX, -((slides.length - 1) * carousel.clientWidth), 0);
+        currentTranslate = clamp(
+            prevTranslate + deltaX,
+            -((slides.length - 1) * carousel.clientWidth),
+            0,
+        );
     });
 
-    carousel?.addEventListener("pointerup", (event) => {
+    carousel?.addEventListener("pointerup", event => {
         if (!isDragging) return;
         isDragging = false;
         cancelAnimationFrame(animationFrameId);
@@ -274,42 +278,55 @@ function initCarousel() {
         carousel.classList.remove("is-dragging");
     });
 
-    carousel?.addEventListener("wheel", (event) => {
-        const horizontalDistance = Math.abs(event.deltaX) > Math.abs(event.deltaY)
-            ? event.deltaX
-            : event.shiftKey
-                ? event.deltaY
-                : 0;
+    carousel?.addEventListener(
+        "wheel",
+        event => {
+            const horizontalDistance =
+                Math.abs(event.deltaX) > Math.abs(event.deltaY)
+                    ? event.deltaX
+                    : event.shiftKey
+                      ? event.deltaY
+                      : 0;
 
-        if (!horizontalDistance) {
-            return;
-        }
+            if (!horizontalDistance) {
+                return;
+            }
 
-        event.preventDefault();
-
-        // Adjust currentTranslate immediately based on wheel delta
-        currentTranslate = clamp(currentTranslate - horizontalDistance, -((slides.length - 1) * carousel.clientWidth), 0);
-        setSliderPosition();
-
-        // Debounce snapping to slide when wheel scroll stops
-        clearTimeout(wheelTimeout);
-        wheelTimeout = setTimeout(() => {
-            const movedSlides = Math.round(-currentTranslate / carousel.clientWidth);
-            current = clamp(movedSlides, 0, slides.length - 1);
-            currentTranslate = -current * carousel.clientWidth;
-            setSliderPosition();
-            render();
-        }, 100);
-    }, { passive: false });
-
-    carousel?.addEventListener("click", (event) => {
-        if (suppressClick) {
             event.preventDefault();
-            suppressClick = false;
-        }
-    }, true);
 
-    document.addEventListener("keydown", (event) => {
+            // Adjust currentTranslate immediately based on wheel delta
+            currentTranslate = clamp(
+                currentTranslate - horizontalDistance,
+                -((slides.length - 1) * carousel.clientWidth),
+                0,
+            );
+            setSliderPosition();
+
+            // Debounce snapping to slide when wheel scroll stops
+            clearTimeout(wheelTimeout);
+            wheelTimeout = setTimeout(() => {
+                const movedSlides = Math.round(-currentTranslate / carousel.clientWidth);
+                current = clamp(movedSlides, 0, slides.length - 1);
+                currentTranslate = -current * carousel.clientWidth;
+                setSliderPosition();
+                render();
+            }, 100);
+        },
+        { passive: false },
+    );
+
+    carousel?.addEventListener(
+        "click",
+        event => {
+            if (suppressClick) {
+                event.preventDefault();
+                suppressClick = false;
+            }
+        },
+        true,
+    );
+
+    document.addEventListener("keydown", event => {
         if (!document.getElementById("list-view")?.hidden) {
             return;
         }

@@ -38,6 +38,8 @@ use tracing::{debug, debug_span, error, info, instrument, warn};
 use tracing_subscriber::prelude::*;
 use webring::Webring;
 
+#[path = "capture-previews.rs"]
+mod capture_previews;
 mod checking;
 mod config;
 mod discord;
@@ -145,6 +147,7 @@ async fn async_main(cli: CliOptions, cfg: Arc<Config>) -> ExitCode {
 
     // Create webring data structure
     let webring = Arc::new(Webring::new(&cfg));
+    webring.enable_preview_regeneration();
 
     // Perform site checks every 5 minutes
     {

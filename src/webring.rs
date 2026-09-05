@@ -26,6 +26,7 @@ use std::{
         Arc, OnceLock, RwLock, RwLockReadGuard,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use axum::http::{Uri, uri::Authority};
@@ -46,6 +47,7 @@ use thiserror::Error;
 use tracing::{Instrument, debug, error, field::display, info, info_span, instrument, warn};
 
 use crate::{
+    capture_previews::{absolute_url, capture},
     checking::check,
     config::{Config, MemberSpec},
     discord::{DiscordNotifier, NOTIFICATION_DEBOUNCE_PERIOD, Snowflake},
@@ -80,6 +82,15 @@ pub enum EnrollmentStatus {
     Alum,
 }
 
+/// A screenshot and the time it was generated.
+#[derive(Clone, Debug)]
+struct CachedPreview {
+    /// Screenshot bytes.
+    bytes: Arc<[u8]>,
+    /// Time the screenshot was generated.
+    generated_at: Instant,
+}
+
 /// Ring member
 #[derive(Clone, Debug)]
 struct Member {
@@ -99,6 +110,10 @@ struct Member {
     check_successful: Arc<AtomicBool>,
     /// The last time the member was notified of a failure.
     last_notified: Arc<AsyncMutex<Option<Instant>>>,
+    /// Cached screenshot of the member's website.
+    preview: Arc<RwLock<Option<CachedPreview>>>,
+    /// Serializes background screenshot captures for one member.
+    preview_generation: Arc<AsyncMutex<()>>,
 }
 
 impl From<(&str, &MemberSpec)> for Member {
@@ -112,11 +127,55 @@ impl From<(&str, &MemberSpec)> for Member {
             check_level: spec.check_level,
             check_successful: Arc::new(AtomicBool::new(true)),
             last_notified: Arc::new(AsyncMutex::new(None)),
+            preview: Arc::new(RwLock::new(None)),
+            preview_generation: Arc::new(AsyncMutex::new(())),
         }
     }
 }
 
 impl Member {
+    /// Start refreshing the member's screenshot unless one is already in progress.
+    fn refresh_preview(&self) {
+        let website = absolute_url(&self.website.to_string());
+        let name = self.name.clone();
+        let preview = Arc::clone(&self.preview);
+        let generation = Arc::clone(&self.preview_generation);
+        tokio::spawn(async move {
+            let Ok(_guard) = generation.try_lock() else {
+                return;
+            };
+            match capture(&website).await {
+                Ok(bytes) => {
+                    let Ok(mut cached) = preview.try_write() else {
+                        return;
+                    };
+                    *cached = Some(CachedPreview {
+                        bytes: Arc::from(bytes),
+                        generated_at: Instant::now(),
+                    });
+                    info!(member = %name, "refreshed member preview");
+                }
+                Err(err) => warn!(member = %name, %err, "failed to refresh member preview"),
+            }
+        });
+    }
+
+    /// Return the cached screenshot and trigger a background refresh when stale.
+    fn preview(&self, revalidation_period: Duration) -> Option<Arc<[u8]>> {
+        let Ok(cache) = self.preview.try_read() else {
+            return None;
+        };
+        let stale = cache
+            .as_ref()
+            .is_none_or(|preview| preview.generated_at.elapsed() >= revalidation_period);
+        let bytes = cache.as_ref().map(|preview| Arc::clone(&preview.bytes));
+
+        if stale {
+            self.refresh_preview();
+        }
+        bytes
+    }
+
     /// Checks the member's site, and stores the result. If the check fails and the member has
     /// opted in to notifications, also notifies them of the failure.
     ///
@@ -206,6 +265,8 @@ pub struct Webring {
     homepage: AsyncRwLock<Option<Arc<Homepage>>>,
     /// Directory where static content is to be served from.
     static_dir_path: PathBuf,
+    /// Time after which a member screenshot must be regenerated.
+    preview_revalidation_period: Duration,
     /// File watcher for reloading the webring or homepage when the config file or homepage
     /// template changes
     file_watcher: OnceLock<RecommendedWatcher>,
@@ -232,6 +293,9 @@ impl Webring {
         Webring {
             members: RwLock::new(member_map_from_config_table(&config.members)),
             static_dir_path: config.webring.static_dir.clone(),
+            preview_revalidation_period: Duration::from_secs(
+                config.webring.preview_revalidation_period,
+            ),
             homepage: AsyncRwLock::new(None),
             stats: Arc::new(Stats::new()),
             file_watcher: OnceLock::default(),
@@ -263,6 +327,11 @@ impl Webring {
                 match old_members.get(name) {
                     Some(old_member) => {
                         new_member.check_successful = Arc::clone(&old_member.check_successful);
+                        if old_member.website == new_member.website {
+                            new_member.preview = Arc::clone(&old_member.preview);
+                            new_member.preview_generation =
+                                Arc::clone(&old_member.preview_generation);
+                        }
                         if old_member.check_level != new_member.check_level {
                             tasks.push(new_member.check_and_store_and_optionally_notify(
                                 self.base_address,
@@ -311,6 +380,56 @@ impl Webring {
         while tasks.next().await.is_some() {}
 
         *self.homepage.write().await = None;
+    }
+
+    /// Return the configured screenshot revalidation period.
+    pub fn preview_revalidation_period(&self) -> Duration {
+        self.preview_revalidation_period
+    }
+
+    /// Return a member's cached screenshot and refresh it in the background when stale.
+    pub fn preview(&self, id: &str) -> Option<Arc<[u8]>> {
+        let member = self
+            .members
+            .read()
+            .unwrap()
+            .values()
+            .find(|member| preview_id(&member.name) == id)
+            .cloned()?;
+        member.preview(self.preview_revalidation_period)
+    }
+
+    /// Seed a member preview for route tests.
+    #[cfg(test)]
+    pub fn cache_preview_for_test(&self, id: &str, bytes: &[u8]) {
+        let members = self.members.read().unwrap();
+        let member = members
+            .values()
+            .find(|member| preview_id(&member.name) == id)
+            .unwrap();
+        *member.preview.write().unwrap() = Some(CachedPreview {
+            bytes: Arc::from(bytes),
+            generated_at: Instant::now(),
+        });
+    }
+
+    /// Refresh all member screenshots periodically without making requests wait for captures.
+    pub fn enable_preview_regeneration(self: &Arc<Self>) {
+        let weak_webring = Arc::downgrade(self);
+        let revalidation_period = self.preview_revalidation_period;
+        tokio::spawn(async move {
+            loop {
+                {
+                    let Some(webring) = weak_webring.upgrade() else {
+                        return;
+                    };
+                    for member in webring.members.read().unwrap().values() {
+                        member.refresh_preview();
+                    }
+                };
+                tokio::time::sleep(revalidation_period).await;
+            }
+        });
     }
 
     /// Get the authority part of the given URI, returning an error if it doesn't have one or if it
@@ -723,6 +842,7 @@ mod tests {
                 members: RwLock::default(),
                 homepage: AsyncRwLock::default(),
                 static_dir_path: PathBuf::default(),
+                preview_revalidation_period: Duration::from_hours(24),
                 file_watcher: OnceLock::new(),
                 base_address: Intern::default(),
                 base_authority: Intern::new("ring.purduehackers.com".parse().unwrap()),
@@ -819,6 +939,8 @@ mod tests {
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                     last_notified: Arc::new(AsyncMutex::new(None)),
+                    preview: Arc::new(RwLock::new(None)),
+                    preview_generation: Arc::new(AsyncMutex::new(())),
                 },
             );
             expected.insert(
@@ -832,6 +954,8 @@ mod tests {
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                     last_notified: Arc::new(AsyncMutex::new(None)),
+                    preview: Arc::new(RwLock::new(None)),
+                    preview_generation: Arc::new(AsyncMutex::new(())),
                 },
             );
             expected.insert(
@@ -845,6 +969,8 @@ mod tests {
                     check_level: CheckLevel::JustOnline,
                     check_successful: Arc::new(AtomicBool::new(true)),
                     last_notified: Arc::new(AsyncMutex::new(None)),
+                    preview: Arc::new(RwLock::new(None)),
+                    preview_generation: Arc::new(AsyncMutex::new(())),
                 },
             );
             expected.insert(
@@ -858,6 +984,8 @@ mod tests {
                     check_level: CheckLevel::None,
                     check_successful: Arc::new(AtomicBool::new(true)),
                     last_notified: Arc::new(AsyncMutex::new(None)),
+                    preview: Arc::new(RwLock::new(None)),
+                    preview_generation: Arc::new(AsyncMutex::new(())),
                 },
             );
             assert_eq!(*inner, expected);
@@ -1251,6 +1379,8 @@ mod tests {
             check_level: CheckLevel::JustOnline,
             check_successful: Arc::new(AtomicBool::new(true)),
             last_notified: Arc::new(AsyncMutex::new(None)),
+            preview: Arc::new(RwLock::new(None)),
+            preview_generation: Arc::new(AsyncMutex::new(())),
         };
 
         let notifier = Arc::new(DiscordNotifier::new(
