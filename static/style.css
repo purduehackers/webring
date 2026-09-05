@@ -19,19 +19,22 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 
 @font-face {
     font-family: "PixelHackers";
-    src: url("/static/PixelHackers.woff2") format("woff2");
+    src: url("https://f3ibyzhjurhjiwis.public.blob.vercel-storage.com/PixelHackers.woff2")
+        format("woff2");
     font-display: swap;
 }
 
 @font-face {
     font-family: "PolySans Slim";
-    src: url("/static/PolySans-Slim.woff2") format("woff2");
+    src: url("https://f3ibyzhjurhjiwis.public.blob.vercel-storage.com/PolySans-Slim.woff2")
+        format("woff2");
     font-display: swap;
 }
 
 @font-face {
     font-family: "PolySans Slim Italic";
-    src: url("/static/PolySans-SlimItalic.woff2") format("woff2");
+    src: url("https://f3ibyzhjurhjiwis.public.blob.vercel-storage.com/PolySans-SlimItalic.woff2")
+        format("woff2");
     font-display: swap;
 }
 
