@@ -49,7 +49,7 @@ use crate::{
     checking::check,
     config::{Config, MemberSpec},
     discord::{DiscordNotifier, NOTIFICATION_DEBOUNCE_PERIOD, Snowflake},
-    homepage::{Homepage, MemberForHomepage},
+    homepage::{Homepage, MemberForHomepage, preview_id},
     stats::{Stats, UNKNOWN_ORIGIN},
 };
 
@@ -474,6 +474,7 @@ impl Webring {
                     .iter()
                     .map(|(_, member_info)| MemberForHomepage {
                         name: member_info.name.clone(),
+                        preview_id: preview_id(&member_info.name),
                         website: member_info.website.as_ref().into(),
                         check_successful: member_info.check_successful.load(Ordering::Relaxed),
                         enrollment: member_info.enrollment,

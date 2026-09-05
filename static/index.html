@@ -19,164 +19,136 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 
 <!doctype html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta
-            name="viewport"
-            content="width=device-width, initial-scale=1.0"
-        />
-        <title>Purdue Hackers Webring</title>
-        <link
-            rel="icon"
-            href="/static/PurdueHackers.svg"
-        />
-        <link
-            rel="stylesheet"
-            href="/static/style.css"
-        />
 
-        <meta
-            property="og:title"
-            content="Purdue Hackers Webring"
-        />
-        <meta
-            property="og:url"
-            content="https://ring.purduehackers.com/"
-        />
-        <meta
-            property="og:description"
-            content="A web ring for the members (and friends) of the Purdue Hackers club."
-        />
-        <meta
-            property="og:type"
-            content="website"
-        />
-        <meta
-            property="og:image"
-            content="https://ring.purduehackers.com/static/opengraph.png"
-        />
-        <meta
-            property="og:image:width"
-            content="1200"
-        />
-        <meta
-            property="og:image:height"
-            content="630"
-        />
-        <meta
-            property="og:image:type"
-            content="image/png"
-        />
-        <meta
-            property="og:locale"
-            content="en_US"
-        />
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>purdue hackers webring</title>
+    <link rel="icon" href="/static/webring-logo.svg" />
+    <link rel="stylesheet" href="/static/style.css" />
 
-        <script
-            defer
-            src="/static/index.js"
-        ></script>
+    <meta property="og:title" content="Purdue Hackers Webring" />
+    <meta property="og:url" content="https://ring.purduehackers.com/" />
+    <meta property="og:description" content="A web ring for the members (and friends) of the Purdue Hackers club." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://ring.purduehackers.com/static/opengraph.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:locale" content="en_US" />
 
-        <script
-            defer
-            src="https://umami.purduehackers.com/script.js"
-            data-website-id="8bb9457c-0530-4636-8407-48ccccff8e3a"
-        ></script>
-    </head>
+    <script defer src="/static/index.js"></script>
 
-    <body>
-        <main>
-            <section id="titlesec">
-                <h1>
-                    <span class="nowrap">
-                        <img
-                            src="/static/PurdueHackers-bw.svg"
-                            alt="Purdue Hackers logo"
-                            style="height: 0.8em"
-                        />
-                        Purdue
+    <script defer src="https://umami.purduehackers.com/script.js"
+        data-website-id="8bb9457c-0530-4636-8407-48ccccff8e3a"></script>
+</head>
+
+<body>
+    <!--
+        Figma asset placeholder: the design uses a paper texture here. The
+        local CSS grain below keeps the page usable without a remote asset;
+        replace it with the final texture URL when one is available.
+    -->
+    <div class="grain" aria-hidden="true">
+        <img src="/static/grain.jpg" aria-hidden="true" />
+    </div>
+
+    <header id="site-header">
+        <a href="https://purduehackers.com" class="logo" aria-label="Purdue Hackers home">
+            <img src="/static/webring-logo.svg" alt="" />
+        </a>
+
+        <div class="header-right">
+            <p class="site-title">purdue hackers webring</p>
+            <p class="tagline">
+                a <a href="https://en.wikipedia.org/wiki/Webring" class="accent">webring</a> for members and alumni <br />of
+           purdue hackers. written in
+                <a href="https://github.com/purduehackers/webring" class="accent">rust</a>.
+            </p>
+
+            <div class="view-toggle" role="group" aria-label="Page view">
+                <button type="button" class="view-toggle-button" data-view="carousel" aria-pressed="true"
+                    aria-label="Carousel view">
+                    <svg viewBox="0 0 12 12" aria-hidden="true">
+                        <rect x="1" y="2" width="7" height="8" rx="0.5" />
+                        <rect x="9" y="3" width="2" height="6" rx="0.5" opacity="0.45" />
+                    </svg>
+                </button>
+                <button type="button" class="view-toggle-button" data-view="list" aria-pressed="false"
+                    aria-label="List view">
+                    <svg viewBox="0 0 12 12" aria-hidden="true">
+                        <rect x="1" y="1" width="10" height="2" />
+                        <rect x="1" y="5" width="10" height="2" />
+                        <rect x="1" y="9" width="10" height="2" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        {% if members | length == 0 -%}
+        <p class="empty-state">No members in the ring yet &mdash; check back soon.</p>
+        {% else -%}
+        <section id="carousel-view" class="view" aria-label="Websites in the webring">
+            <div class="carousel">
+                <div class="carousel-track">
+                    {% for member in members -%}
+                    <div class="carousel-slide" data-index="{{ loop.index0 }}">
+                        <a class="preview-frame"
+                            href="{{ base_addr.href }}visit?member={{ member.website.authority }}"
+                            aria-label="Visit {{ member.name }}'s website"
+                            data-umami-event="visit-member" data-umami-event-name="{{ member.name }}"
+                            data-umami-event-site="{{ member.website.authority }}">
+                            <img src="/static/previews/{{ member.preview_id }}.png"
+                                loading="eager" alt="Preview of {{ member.name }}'s website" />
+                            <span class="preview-caption">{{ member.website.authority }}{% if
+                                member.website.path_and_query != "/" %}{{ member.website.path_and_query }}{% endif
+                                %}</span>
+                        </a>
+                    </div>
+                    {% endfor -%}
+                </div>
+            </div>
+
+            <div class="carousel-controls" aria-label="Browse webring members">
+                <button type="button" id="prev-btn" aria-label="Previous member" data-umami-event="carousel-prev">
+                    <span aria-hidden="true">&lt;</span>
+                </button>
+                <p id="current-name" class="member-name-label" aria-live="polite"></p>
+                <button type="button" id="next-btn" aria-label="Next member" data-umami-event="carousel-next">
+                    <span aria-hidden="true">&gt;</span>
+                </button>
+            </div>
+        </section>
+
+        <section id="list-view" class="view list-view" aria-labelledby="list-heading" hidden>
+            <div class="list-heading-row">
+                <h2 id="list-heading">members in the ring</h2>
+                <span>{{ members | length }}</span>
+            </div>
+            <div class="member-list">
+                {% for member in members -%}
+                <a class="member-list-row"
+                    href="{{ base_addr.href }}visit?member={{ member.website.authority }}"
+                    data-umami-event="visit-member" data-umami-event-name="{{ member.name }}"
+                    data-umami-event-site="{{ member.website.authority }}">
+                    <span class="member-list-name">{{ member.name }}{% if member.enrollment == "alum" %}&nbsp;<span
+                            class="alum-icon" title="Alumni">🎓</span>{% endif %}</span>
+                    <span class="member-list-site">{{ member.website.authority }}{% if
+                        member.website.path_and_query != "/" %}{{ member.website.path_and_query }}{% endif %}</span>
+                    <span class="member-list-preview" aria-hidden="true">
+                        <img src="/static/previews/{{ member.preview_id }}.png"
+                            loading="lazy" alt="" />
                     </span>
-                    Hackers Web Ring
-                </h1>
+                </a>
+                {% endfor -%}
+            </div>
+        </section>
+        {% endif -%}
+    </main>
+</body>
 
-                <p>
-                    This is a <a href="https://en.wikipedia.org/wiki/Webring">web ring</a>
-                    for the members and alumni of the
-                    <a href="https://purduehackers.com">Purdue Hackers club</a>.
-                </p>
-                <p>
-                    <a href="https://github.com/purduehackers/webring"> Written by us in Rust</a>.
-                </p>
-            </section>
-
-            <section id="members">
-                <h2>Websites in ring</h2>
-                <div id="tablecontainer">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Member</th>
-                                <th>Site link</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for member in members -%}
-                            <tr>
-                                <td>
-                                    {{ member.name }}{% if member.enrollment == "alum" %}&nbsp;<span
-                                        class="alum-icon"
-                                        title="Alumni"
-                                        >🎓</span
-                                    >{% endif %}
-                                </td>
-                                <td>
-                                    <a
-                                        href="{{ base_addr.href }}visit?member={{ member.website.authority }}"
-                                        data-umami-event="visit-member"
-                                        data-umami-event-name="{{ member.name }}"
-                                        data-umami-event-site="{{ member.website.authority }}"
-                                        >{{ member.website.authority }}{%- if
-                                        member.website.path_and_query != "/" -%} {{
-                                        member.website.path_and_query }} {%- endif %}</a
-                                    >
-                                </td>
-                            </tr>
-                            {% endfor -%}
-                        </tbody>
-                    </table>
-                </div>
-
-                <div id="fun-selector">
-                    <form action="#">
-                        <div>
-                            <label for="flip">
-                                Backwards mode
-                                <input
-                                    type="checkbox"
-                                    id="flip"
-                                    name="flip"
-                                    onchange="setFlip(this.checked)"
-                                    data-umami-event="backwards-mode-toggle"
-                                />
-                            </label>
-                        </div>
-                        <div>
-                            <label for="ausflip">
-                                Australia mode
-                                <input
-                                    type="checkbox"
-                                    id="ausflip"
-                                    name="ausflip"
-                                    onchange="setAusFlip(this.checked)"
-                                    data-umami-event="ausflip-mode-toggle"
-                                />
-                            </label>
-                        </div>
-                    </form>
-                </div>
-            </section>
-        </main>
-    </body>
 </html>
 
 <!-- vim: set noet : -->
