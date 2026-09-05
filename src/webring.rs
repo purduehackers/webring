@@ -47,11 +47,11 @@ use thiserror::Error;
 use tracing::{Instrument, debug, error, field::display, info, info_span, instrument, warn};
 
 use crate::{
-    capture_previews::{absolute_url, capture},
     checking::check,
     config::{Config, MemberSpec},
     discord::{DiscordNotifier, NOTIFICATION_DEBOUNCE_PERIOD, Snowflake},
     homepage::{Homepage, MemberForHomepage, preview_id},
+    site_previews::{absolute_url, capture},
     stats::{Stats, UNKNOWN_ORIGIN},
 };
 

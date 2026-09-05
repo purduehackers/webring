@@ -38,13 +38,12 @@ use tracing::{debug, debug_span, error, info, instrument, warn};
 use tracing_subscriber::prelude::*;
 use webring::Webring;
 
-#[path = "capture-previews.rs"]
-mod capture_previews;
 mod checking;
 mod config;
 mod discord;
 mod homepage;
 mod routes;
+mod site_previews;
 mod stats;
 mod webring;
 
