@@ -182,25 +182,53 @@ jobs:
           name: coverage-html
           path: target/llvm-cov/html/
 
-  # Adding this because we don't want to run the whole build workflow on each
-  # push
   build:
-    name: Build project
+    name: Build container image
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.commit.outputs.short_sha }}
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
 
-      - name: Set up Rust toolchain
-        run: rustup install --profile minimal
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
-      - name: Cache build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Generate short commit hash
+        id: commit
+        shell: bash
+        run: echo "short_sha=${GITHUB_SHA::7}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate image metadata
+        id: metadata
+        uses: docker/metadata-action@v6
         with:
-          cache-on-failure: true
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ steps.commit.outputs.short_sha }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
 
-      - name: Compile project
-        run: cargo build --workspace --all-targets --release --locked
+      - name: Log in to GitHub Container Registry
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push container image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Containerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=webring-container
+          cache-to: type=gha,mode=max,scope=webring-container
 
   deploy:
     name: Deploy
@@ -212,15 +240,12 @@ jobs:
     environment: Production
     concurrency:
       group: deploy-production
-      cancel-in-progress: true
+      cancel-in-progress: false
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
-        with:
-          sparse-checkout: ci
 
       - name: Configure SSH
         env:
@@ -230,20 +255,13 @@ jobs:
           echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
           chmod -R u=rwX,g=,o= ~/.ssh
 
-      - name: Build on Vulcan
-        id: build
-        continue-on-error: true
-        run: ssh vulcan nix build "github:${{ github.repository }}/${{ github.sha }}"
+      - name: Copy compose.yml to Vulcan
+        run: rsync -v --mkpath ci/compose.yml vulcan:webring-data/compose.yml
 
-      - name: Update flake.lock
-        if: steps.build.outcome == 'failure'
+      - name: Upgrade deployed container on Vulcan
         env:
-          FLAKE_URL: github:${{ github.repository }}/${{ github.sha }}
-          LOCKFILE: /tmp/webring-flake-${{ github.run_id }}-${{ github.run_attempt }}.lock
-          BRANCH_NAME: update-flake-${{ github.run_id }}-${{ github.run_attempt }}
-          GH_TOKEN: ${{ github.token }}
-        run: ./ci/update-flake-lock.sh
-
-      - name: Deploy on Vulcan
-        if: steps.build.outcome == 'success'
-        run: ssh vulcan home-manager switch --flake "github:${{ github.repository }}/${{ github.sha }}"
+          WEBRING_IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+        run: >-
+          ssh vulcan
+          "cd webring-data &&
+          WEBRING_IMAGE_TAG='${WEBRING_IMAGE_TAG}' docker compose up --detach"

@@ -1,0 +1,42 @@
+# Copyright (C) 2026 Purdue Hackers
+#
+# This file is part of the Purdue Hackers webring.
+#
+# The Purdue Hackers webring is free software: you can redistribute it and/or
+# modify it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+name: webring
+
+services:
+  webring:
+    image: "ghcr.io/purduehackers/webring:${WEBRING_IMAGE_TAG:?WEBRING_IMAGE_TAG must be set}"
+    restart: unless-stopped
+    ports:
+      - "20020:80"
+    volumes:
+      - type: bind
+        source: ./webring.toml
+        target: /etc/webring/webring.toml
+        read_only: true
+      - type: volume
+        source: state
+        target: /var/lib/webring
+      - type: volume
+        source: cache
+        target: /var/cache/webring
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+
+volumes:
+  state:
+  cache:

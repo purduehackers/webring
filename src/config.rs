@@ -20,7 +20,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 //! Configuration file handling
 
 use std::{
-    net::SocketAddr,
+    net::{IpAddr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
 };
 
@@ -37,12 +37,14 @@ use crate::{
 };
 
 /// Webring configuration object
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Config {
     /// Ring configuration
+    #[serde(default)]
     pub webring: WebringTable,
     /// Network/server configuration
+    #[serde(default)]
     pub network: NetworkTable,
     /// Logging configuration
     #[serde(default)]
@@ -60,6 +62,7 @@ pub struct Config {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct WebringTable {
     /// Directory from which to serve static content
+    #[serde(default = "default_static_dir")]
     pub static_dir: PathBuf,
 
     /// Base URL of the webring, e.g. `https://ring.purduehackers.com`
@@ -70,6 +73,20 @@ pub struct WebringTable {
         deserialize_with = "deserialize_interned_uri"
     )]
     base_url: Intern<Uri>,
+}
+
+/// Returns the default static directory
+fn default_static_dir() -> PathBuf {
+    PathBuf::from("/usr/share/webring/static")
+}
+
+impl Default for WebringTable {
+    fn default() -> Self {
+        Self {
+            static_dir: default_static_dir(),
+            base_url: default_address(),
+        }
+    }
 }
 
 impl WebringTable {
@@ -84,7 +101,21 @@ impl WebringTable {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct NetworkTable {
     /// Address/port to listen on
+    #[serde(default = "default_listen_addr")]
     pub listen_addr: SocketAddr,
+}
+
+/// Returns the default listen address (`[::1]:80`)
+fn default_listen_addr() -> SocketAddr {
+    SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 80)
+}
+
+impl Default for NetworkTable {
+    fn default() -> Self {
+        Self {
+            listen_addr: default_listen_addr(),
+        }
+    }
 }
 
 /// Logging configuration table
@@ -254,7 +285,9 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::net::SocketAddr;
+    use std::path::{Path, PathBuf};
+    use std::str::FromStr;
 
     use axum::http::Uri;
     use indexmap::IndexMap;
@@ -375,21 +408,22 @@ mod tests {
         "# };
         let result = toml::from_str::<Config>(config);
         assert!(result.is_err());
-        assert_eq!("missing field `listen-addr`", result.unwrap_err().message());
+        assert_eq!("missing field `channel-id`", result.unwrap_err().message());
     }
 
     #[test]
-    fn missing_required_section() {
-        let config = indoc! { r#"
-            [webring]
-            static-dir = "static"
-            [discord]
-            webhook-url = "https://api.discord.com/webhook-or-something"
-            channel-id = 1234567890
-        "# };
-        let result = toml::from_str::<Config>(config);
-        assert!(result.is_err());
-        assert_eq!("missing field `network`", result.unwrap_err().message());
+    /// Ensures that the defaults for some values match what the container setup expects
+    fn container_defaults() {
+        let config = "";
+        let actual = toml::from_str::<Config>(config).unwrap();
+        assert_eq!(
+            actual.network.listen_addr,
+            SocketAddr::from_str("[::]:80").unwrap()
+        );
+        assert_eq!(
+            actual.webring.static_dir.as_path(),
+            Path::new("/usr/share/webring/static")
+        );
     }
 
     #[test]

@@ -68,7 +68,7 @@ This table contains settings pertaining to the webring server.
 | Key          | Required | Type          | Default                          |
 | ---          | ---      | ---           | ---                              |
 | `base-url`   | no       | string (URL)  | `https://ring.purduehackers.com` |
-| `static-dir` | yes      | string (path) | none                             |
+| `static-dir` | no       | string (path) | `/usr/share/webring/static`      |
 
 Example:
 ```toml
@@ -107,9 +107,9 @@ configuration file, so that there is no confusion about relative paths.
 
 Settings pertaining to how the webring communicates over the network.
 
-| Key           | Required | Type               | Default |
-| ---           | ---      | ---                | ---     |
-| `listen-addr` | yes      | string (`ip:port`) | none    |
+| Key           | Required | Type               | Default      |
+| ---           | ---      | ---                | ---          |
+| `listen-addr` | no       | string (`ip:port`) | `[::]:80`    |
 
 #### `listen-addr`
 
