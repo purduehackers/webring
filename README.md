@@ -39,6 +39,38 @@ In a not-very-academically-rigorous benchmark, we were able to serve ~15,000 req
 [Tokio]: https://tokio.rs
 [AWS EC2 t2.micro]: https://aws.amazon.com/ec2/instance-types/t2/
 
+# Running in a container
+
+Build the image with Podman from the repository root:
+
+```sh
+podman build --tag ph-webring .
+```
+
+The image includes the repository's `webring.toml` and static assets, listens
+on port 3000, and runs as an unprivileged user. Start it with:
+
+```sh
+podman run --rm --name ph-webring --publish 3000:3000 ph-webring
+```
+
+For a deployment-specific configuration, bind mount it over the included file.
+The `Z` option gives the mount a private SELinux label on systems where SELinux
+is enabled:
+
+```sh
+podman run --detach \
+  --name ph-webring \
+  --publish 3000:3000 \
+  --volume ./webring.toml:/app/webring.toml:ro,Z \
+  ph-webring
+```
+
+Paths in the configuration are resolved from `/app`. The bundled static assets
+are therefore available with `static-dir = "static"`. File logging also writes
+relative paths under `/app`; omit `log-file` to log only to the container's
+standard output stream.
+
 # License
 Copyright (C) 2025 members of Purdue Hackers
 
