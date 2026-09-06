@@ -39,6 +39,35 @@ In a not-very-academically-rigorous benchmark, we were able to serve ~15,000 req
 [Tokio]: https://tokio.rs
 [AWS EC2 t2.micro]: https://aws.amazon.com/ec2/instance-types/t2/
 
+# Running in a container
+
+Build the image with Docker from the repository root:
+
+```sh
+docker build --tag ghcr.io/purduehackers/webring:local --file Containerfile .
+```
+
+The image includes the static assets, listens on container port 80, and expects
+its configuration at `/etc/webring/webring.toml`. Start it with:
+
+```sh
+docker run --rm \
+  --name webring \
+  --publish 3000:80 \
+  --volume ./webring.toml:/etc/webring/webring.toml:ro \
+  ghcr.io/purduehackers/webring:local
+```
+
+You can mount volumes/directories on the following paths:
+- `/usr/share/webring/static`: the default static web content directory
+
+Production images are published to GitHub Container Registry with the short
+Git commit as their tag. The newest image built from `master` is also tagged
+`latest`.
+
+The Docker Compose specification used for the production deployment is provided
+at `ci/compose.yml`.
+
 # License
 Copyright (C) 2025 members of Purdue Hackers
 
