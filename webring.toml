@@ -16,11 +16,7 @@
 # with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 
 [webring]
-static-dir = "static"
 base-url = "https://ring.purduehackers.com"
-
-[network]
-listen-addr = "0.0.0.0:3000"
 
 [logging]
 verbosity = "info"
