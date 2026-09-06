@@ -215,14 +215,14 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
                         >
                             <a
                                 class="preview-frame"
-                                href="{{ base_addr.href }}visit?member={{ member.website.authority }}"
+                                href="{{ base_addr.href }}visit?member={{ member.website.authority | urlencode_strict }}"
                                 aria-label="Visit {{ member.name }}'s website"
                                 data-umami-event="visit-member"
                                 data-umami-event-name="{{ member.name }}"
                                 data-umami-event-site="{{ member.website.authority }}"
                             >
                                 <img
-                                    src="/preview/{{ member.preview_id }}"
+                                    src="/preview?member={{ member.website.authority | urlencode_strict }}"
                                     loading="eager"
                                     alt="Preview of {{ member.name }}'s website"
                                 />
@@ -279,7 +279,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
                     {% for member in members -%}
                     <a
                         class="member-list-row"
-                        href="{{ base_addr.href }}visit?member={{ member.website.authority }}"
+                        href="{{ base_addr.href }}visit?member={{ member.website.authority | urlencode_strict }}"
                         data-umami-event="visit-member"
                         data-umami-event-name="{{ member.name }}"
                         data-umami-event-site="{{ member.website.authority }}"
@@ -300,7 +300,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
                             aria-hidden="true"
                         >
                             <img
-                                src="/preview/{{ member.preview_id }}"
+                                src="/preview?member={{ member.website.authority | urlencode_strict }}"
                                 loading="lazy"
                                 alt=""
                             />

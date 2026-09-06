@@ -36,8 +36,10 @@ missing-docs-in-private-items = "warn"
 
 [dependencies]
 axum = { version = "0.8.4", default-features = false, features = [ "http1", "http2", "tokio", "tracing", "query" ] }
+chromiumoxide = "0.9.1"
 chrono = { version = "0.4.41", default-features = false, features = [ "serde", "now" ] }
 clap = { version = "4.5.41", features = ["derive"] }
+duration-str = "0.21.0"
 eyre = "0.6.12"
 futures = { version = "0.3.31", default-features = false, features = [ "alloc" ] }
 html-escape = { version = "0.2.13", default-features = false }
@@ -56,7 +58,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.141"
 tera = { version = "1.20.0", default-features = false, features = [ "urlencode" ] }
 thiserror = { version = "2.0.12", default-features = false }
-tokio = { version = "1.47.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.47.0", features = ["macros", "rt-multi-thread", "process", "time"] }
 toml = { version = "1.0.0", default-features = false, features = ["preserve_order", "parse", "serde", "std"] }
 tower = "0.5.2"
 tower-http = { version = "0.6.6", features = ["cors", "fs", "catch-panic", "trace", "set-header"] }

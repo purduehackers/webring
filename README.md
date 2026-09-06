@@ -51,11 +51,16 @@ The image includes the static assets, listens on container port 80, and expects
 its configuration at `/etc/webring/webring.toml`. Start it with:
 
 ```sh
-docker run --rm \
+docker run --rm -it \
   --name webring \
-  --publish 3000:80 \
-  --volume ./webring.toml:/etc/webring/webring.toml:ro \
-  ghcr.io/purduehackers/webring:local
+  -p 8080:80 \
+  -v ./webring.toml:/etc/webring/webring.toml:ro \
+  --shm-size=1G \
+  --cap-drop=ALL \
+  --cap-add=NET_BIND_SERVICE \
+  --security-opt no-new-privileges:true \
+  --security-opt seccomp=./ci/deploy/seccomp_profile.json \
+  ghcr.io/purduehackers/webring
 ```
 
 You can mount volumes/directories on the following paths:

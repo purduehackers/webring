@@ -255,8 +255,8 @@ jobs:
           echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
           chmod -R u=rwX,g=,o= ~/.ssh
 
-      - name: Copy compose.yml to Vulcan
-        run: rsync -v --mkpath ci/compose.yml vulcan:webring-data/compose.yml
+      - name: Copy container configuration to Vulcan
+        run: rsync -rv --mkpath ci/deploy/ vulcan:webring-data/
 
       - name: Upgrade deployed container on Vulcan
         env:

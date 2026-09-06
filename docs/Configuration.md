@@ -65,24 +65,24 @@ happens:
 
 This table contains settings pertaining to the webring server.
 
-| Key          | Required | Type          | Default                          |
-| ---          | ---      | ---           | ---                              |
-| `base-url`                  | no       | string (URL)  | `https://ring.purduehackers.com` |
-| `static-dir`                | yes      | string (path) | `/usr/share/webring/static`      |
-| `preview-revalidation-period` | no       | integer (seconds) | `86400`                      |
+| Key                           | Required | Type              | Default                          |
+| ---                           | ---      | ---               | ---                              |
+| `base-url`                    | no       | string (URL)      | `https://ring.purduehackers.com` |
+| `static-dir`                  | yes      | string (path)     | `/usr/share/webring/static`      |
+| `preview-cache-duration`      | no       | string (duration) | `6h`                             |
 
 Example:
 ```toml
 [webring]
 base-url = "https://ring.purduehackers.com"
 static-dir = "static"
-preview-revalidation-period = 86400
+preview-cache-duration = "1h15m"
 ```
 
-#### `preview-revalidation-period`
+#### `preview-cache-duration`
 
-The number of seconds a cached member screenshot may be served before it is
-regenerated in the background. The default is one day (`86400`).
+The amount of time a preview screenshot will be cached for before being
+regenerated.
 
 #### `base-url`
 

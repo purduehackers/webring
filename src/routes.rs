@@ -27,12 +27,13 @@ use std::{
     path::Path,
     str::FromStr,
     sync::{Arc, LazyLock},
+    time::{Duration, SystemTime},
 };
 
 use axum::{
     Router,
     body::Body,
-    extract::{ConnectInfo, Path as AxumPath, Query, Request, State},
+    extract::{ConnectInfo, Query, Request, State},
     handler::HandlerWithoutStateExt,
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header, uri::InvalidUri},
     response::{Html, IntoResponse, NoContent, Response},
@@ -52,7 +53,10 @@ use tower_http::{
 };
 use tracing::warn;
 
-use crate::webring::{TraverseWebringError, Webring};
+use crate::{
+    site_previews::SitePreviewCache,
+    webring::{TraverseWebringError, Webring},
+};
 
 /// Static HTML template for rendering error responses.
 static ERROR_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_error_template);
@@ -60,8 +64,17 @@ static ERROR_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_error_template);
 /// Static HTML template for rendering the /flip page.
 static FLIP_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_flip_template);
 
+/// [`AppState`] holds state for a webring API router.
+#[derive(Debug, Clone)]
+pub struct AppState {
+    /// Webring
+    pub webring: Arc<Webring>,
+    /// Member site preview cache
+    pub preview_cache: Arc<SitePreviewCache>,
+}
+
 /// Creates a [`Router`] with the routes for our application.
-pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
+pub fn create_router(static_dir: &Path) -> Router<AppState> {
     let startup_timestamp_string = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
     Router::new()
         .nest_service(
@@ -91,7 +104,7 @@ pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
             get(async || NoContent).layer(CorsLayer::new().allow_origin(Any)),
         )
         .route("/", get(serve_index))
-        .route("/preview/{member}", get(serve_preview))
+        .route("/preview", get(serve_preview))
         .route("/visit", get(serve_visit))
         .route("/next", get(serve_next))
         // Support /prev and /previous as aliases of each other
@@ -150,7 +163,7 @@ fn redirect_with_content(to: &Uri) -> impl IntoResponse + use<> {
 
 /// Serve the homepage at `/`
 async fn serve_index(
-    State(webring): State<Arc<Webring>>,
+    State(AppState { webring, .. }): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -162,26 +175,40 @@ async fn serve_index(
 
 /// Serve a cached member website screenshot.
 async fn serve_preview(
-    State(webring): State<Arc<Webring>>,
-    AxumPath(member): AxumPath<String>,
-) -> Response {
-    let Some(bytes) = webring.preview(&member) else {
-        return StatusCode::NOT_FOUND.into_response();
+    State(AppState {
+        webring,
+        preview_cache,
+    }): State<AppState>,
+    Query(mut params): Query<HashMap<String, String>>,
+) -> Result<Response, RouteError> {
+    let authority = match params.remove("member") {
+        Some(str) => match str.parse::<Uri>() {
+            Ok(authority) => authority,
+            Err(e) => {
+                return Err(RouteError::InvalidRedirectURI {
+                    uri: str,
+                    reason: e,
+                });
+            }
+        },
+        None => return Err(RouteError::MissingRedirectURI),
     };
-
-    let revalidation_period = webring.preview_revalidation_period().as_secs();
-    let mut response = Response::new(Body::from(bytes.as_ref().to_vec()));
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_str(&format!(
-            "public, max-age={revalidation_period}, stale-while-revalidate={revalidation_period}",
-        ))
-        .unwrap(),
-    );
-    response
+    let (id, uri) = webring.get_preview_info(&authority)?;
+    let preview = preview_cache.get_preview(&id, uri).await;
+    let now = SystemTime::now();
+    let cache_duration = preview
+        .expires_at
+        .duration_since(now)
+        .unwrap_or(Duration::ZERO);
+    Ok(Response::builder()
+        .status(200)
+        .header("Content-Type", "image/webp")
+        .header(
+            "Cache-Control",
+            format!("public, max-age={}", cache_duration.as_secs()),
+        )
+        .body(Body::from(preview.image.0))
+        .unwrap())
 }
 
 /// Serve the `/visit` endpoint
@@ -191,7 +218,7 @@ async fn serve_preview(
 /// 2. Simultaneously queries the webring for the member's URL and logs the request in the statistics
 /// 3. Redirects the user to the member's page
 async fn serve_visit(
-    State(webring): State<Arc<Webring>>,
+    State(AppState { webring, .. }): State<AppState>,
     Query(mut params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, RouteError> {
@@ -222,7 +249,7 @@ async fn serve_visit(
 ///
 /// If finding the next site fails, an HTTP 502 (Service Unavailable) response is sent.
 async fn serve_next(
-    State(webring): State<Arc<Webring>>,
+    State(AppState { webring, .. }): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -248,7 +275,7 @@ async fn serve_next(
 ///
 /// If finding the previous site fails, an HTTP 502 (Service Unavailable) response is sent.
 async fn serve_previous(
-    State(webring): State<Arc<Webring>>,
+    State(AppState { webring, .. }): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -274,7 +301,7 @@ async fn serve_previous(
 ///
 /// If finding a random site fails, an HTTP 502 (Service Unavailable) response is sent.
 async fn serve_random(
-    State(webring): State<Arc<Webring>>,
+    State(AppState { webring, .. }): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -568,6 +595,8 @@ mod tests {
     use tower_http::catch_panic::ResponseForPanic;
 
     use crate::{
+        routes::AppState,
+        site_previews::{SitePreviewCache, TestScreenshotter},
         stats::{TIMEZONE, UNKNOWN_ORIGIN},
         webring::Webring,
     };
@@ -619,7 +648,13 @@ mod tests {
             ericswpark = {{ url = "https://ericswpark.com", discord-id = 789, check-level = "none" }}
         "# }, static_dir.path().to_string_lossy().escape_default())).unwrap();
         let webring = Arc::new(Webring::new(&config));
-        let router: Router = create_router(static_dir.path()).with_state(Arc::clone(&webring));
+        let screenshotter = Box::new(TestScreenshotter::new());
+        let preview_cache = Arc::new(SitePreviewCache::new(&config, screenshotter).await.unwrap());
+        let state = AppState {
+            webring: Arc::clone(&webring),
+            preview_cache: Arc::clone(&preview_cache),
+        };
+        let router: Router = create_router(static_dir.path()).with_state(state);
         (router, webring, static_dir)
     }
 
@@ -691,9 +726,7 @@ mod tests {
 
     #[tokio::test]
     async fn preview() {
-        let (router, webring, tmpfiles) = app().await;
-        webring.cache_preview_for_test("kian", b"fake-png");
-
+        let (router, _webring, tmpfiles) = app().await;
         let res = router
             .oneshot(
                 Request::builder()

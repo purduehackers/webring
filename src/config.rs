@@ -22,6 +22,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 use std::{
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use axum::http::Uri;
@@ -76,11 +77,14 @@ pub struct WebringTable {
         default = "default_address",
         deserialize_with = "deserialize_interned_uri"
     )]
-    base_url: Intern<Uri>,
+    pub base_url: Intern<Uri>,
 
-    /// Number of seconds between member screenshot revalidations.
-    #[serde(default = "default_preview_revalidation_period")]
-    pub preview_revalidation_period: u64,
+    /// Length of time member screenshots may remain cached.
+    #[serde(
+        default = "default_preview_cache_duration",
+        deserialize_with = "duration_str::deserialize_duration"
+    )]
+    pub preview_cache_duration: Duration,
 }
 
 /// Returns the default static directory
@@ -99,17 +103,12 @@ impl Default for WebringTable {
             static_dir: default_static_dir(),
             cache_dir: default_cache_dir(),
             base_url: default_address(),
-            preview_revalidation_period: default_preview_revalidation_period(),
+            preview_cache_duration: default_preview_cache_duration(),
         }
     }
 }
 
-impl WebringTable {
-    /// Gets the base URL of the webring
-    pub fn base_url(&self) -> Intern<Uri> {
-        self.base_url
-    }
-}
+impl WebringTable {}
 
 /// Network/server configuration table
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -247,9 +246,9 @@ where
     LevelFilterWrapper::deserialize(deserializer).map(LevelFilter::from)
 }
 
-/// Get the default screenshot revalidation period in seconds.
-fn default_preview_revalidation_period() -> u64 {
-    24 * 60 * 60
+/// Get the default preview cache duration
+fn default_preview_cache_duration() -> Duration {
+    Duration::from_hours(6)
 }
 
 /// Get default webring base address.
@@ -308,6 +307,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
+    use std::time::Duration;
 
     use axum::http::Uri;
     use indexmap::IndexMap;
@@ -317,6 +317,7 @@ mod tests {
     use sarlacc::Intern;
     use tracing::level_filters::LevelFilter;
 
+    use crate::config::default_preview_cache_duration;
     use crate::{
         config::MemberSpec,
         discord::Snowflake,
@@ -350,7 +351,7 @@ mod tests {
             webring: WebringTable {
                 static_dir: PathBuf::from("static"),
                 cache_dir: PathBuf::from("cache"),
-                preview_revalidation_period: 24 * 60 * 60,
+                preview_cache_duration: default_preview_cache_duration(),
                 base_url: Intern::new(Uri::from_static("https://ring.purduehackers.com/")),
             },
             network: NetworkTable {
@@ -383,20 +384,22 @@ mod tests {
             "https://ring.purduehackers.com/",
             &actual.webring.base_url.to_string()
         );
-        assert_eq!(24 * 60 * 60, actual.webring.preview_revalidation_period);
     }
 
     #[test]
-    fn configured_preview_revalidation_period() {
+    fn configured_preview_cache_duration() {
         let config = indoc! { r#"
             [webring]
             static-dir = "static"
-            preview-revalidation-period = 123
+            preview-cache-duration = "1h15m"
             [network]
             listen-addr = "0.0.0.0:3000"
         "# };
         let actual: Config = toml::from_str(config).unwrap();
-        assert_eq!(123, actual.webring.preview_revalidation_period);
+        assert_eq!(
+            Duration::from_mins(75),
+            actual.webring.preview_cache_duration
+        );
     }
 
     #[test]
@@ -481,7 +484,7 @@ mod tests {
         let result = toml::from_str::<Config>(config);
         assert!(result.is_err());
         assert_eq!(
-            "unknown field `extra-field`, expected one of `static-dir`, `cache-dir`, `base-url`, `preview-revalidation-period`",
+            "unknown field `extra-field`, expected one of `static-dir`, `cache-dir`, `base-url`, `preview-cache-duration`",
             result.unwrap_err().message()
         );
     }
