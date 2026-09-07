@@ -4,5 +4,6 @@ mod cache;
 mod capture;
 
 pub use cache::{SitePreviewCache, SitePreviewId};
-#[allow(unused_imports)]
-pub use capture::{ChromiumScreenshotter, Screenshotter, TestScreenshotter};
+pub use capture::ChromiumScreenshotter;
+#[cfg(test)]
+pub use capture::TestScreenshotter;

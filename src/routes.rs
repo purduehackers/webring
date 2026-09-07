@@ -574,7 +574,12 @@ impl ResponseForPanic for PanicResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, str::FromStr as _, sync::Arc};
+    use std::{
+        net::SocketAddr,
+        str::FromStr as _,
+        sync::Arc,
+        time::{Duration, SystemTime},
+    };
 
     use axum::{
         Router,
@@ -635,18 +640,24 @@ mod tests {
             .await
             .unwrap();
 
+        let cache_dir = static_dir.path().join("cache");
         let config = toml::from_str(&format!(
             indoc! { r#"
             [webring]
             base-url = "https://ring.purduehackers.com"
             static-dir = "{}"
+            cache-dir = "{}"
             [network]
             listen-addr = "0.0.0.0:3000"
             [members]
-            henry = {{ url = "hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }}
-            kian = {{ url = "kasad.com", discord-id = 456, check-level = "none" }}
+            henry = {{ url = "https://hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }}
+            kian = {{ url = "https://kasad.com", discord-id = 456, check-level = "none" }}
             ericswpark = {{ url = "https://ericswpark.com", discord-id = 789, check-level = "none" }}
-        "# }, static_dir.path().to_string_lossy().escape_default())).unwrap();
+        "# },
+            static_dir.path().to_string_lossy().escape_default(),
+            cache_dir.to_string_lossy().escape_default(),
+        ))
+        .unwrap();
         let webring = Arc::new(Webring::new(&config));
         let screenshotter = Box::new(TestScreenshotter::new());
         let preview_cache = Arc::new(SitePreviewCache::new(&config, screenshotter).await.unwrap());
@@ -727,48 +738,60 @@ mod tests {
     #[tokio::test]
     async fn preview() {
         let (router, _webring, tmpfiles) = app().await;
+        let cache_path = tmpfiles.path().join("cache/kian.webp");
+        fs::write(&cache_path, b"cached webp").await.unwrap();
+        let expires_at =
+            fs::metadata(&cache_path).await.unwrap().modified().unwrap() + Duration::from_hours(6);
+
+        let before_request = SystemTime::now();
         let res = router
             .oneshot(
                 Request::builder()
-                    .uri("/preview/kian")
+                    .uri("/preview?member=kasad.com")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
+        let after_request = SystemTime::now();
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(
             res.headers().get(header::CONTENT_TYPE).unwrap(),
-            "image/png"
+            "image/webp"
         );
-        assert_eq!(
-            res.headers().get(header::CACHE_CONTROL).unwrap(),
-            "public, max-age=86400, stale-while-revalidate=86400"
-        );
+        let cache_control = res
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let max_age: u64 = cache_control
+            .strip_prefix("public, max-age=")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let min_max_age = expires_at.duration_since(after_request).unwrap().as_secs();
+        let max_max_age = expires_at.duration_since(before_request).unwrap().as_secs();
+        assert!((min_max_age..=max_max_age).contains(&max_age));
         assert_eq!(
             res.into_body().collect().await.unwrap().to_bytes().as_ref(),
-            b"fake-png"
+            b"cached webp"
         );
-
-        drop(tmpfiles);
     }
 
     #[tokio::test]
     async fn preview_unknown_member() {
-        let (router, _, tmpfiles) = app().await;
-
+        let (router, _, _tmpfiles) = app().await;
         let res = router
             .oneshot(
                 Request::builder()
-                    .uri("/preview/unknown")
+                    .uri("/preview?member=unknown.example")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(res.status(), StatusCode::NOT_FOUND);
-
-        drop(tmpfiles);
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -787,7 +810,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(res.headers().get("location").unwrap(), "kasad.com");
+        assert_eq!(res.headers().get("location").unwrap(), "https://kasad.com/");
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         webring.assert_stat_entry(
             (
@@ -859,7 +882,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(res.headers().get("location").unwrap(), "kasad.com");
+        assert_eq!(res.headers().get("location").unwrap(), "https://kasad.com/");
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
         drop(tmpfiles);
@@ -880,7 +903,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(res.headers().get("location").unwrap(), "hrovnyak.gitlab.io");
+        assert_eq!(
+            res.headers().get("location").unwrap(),
+            "https://hrovnyak.gitlab.io/"
+        );
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
         drop(tmpfiles);

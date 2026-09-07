@@ -1,10 +1,6 @@
 //! Capture member website previews with Chromium.
 
-use std::{
-    fmt::Debug,
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
-};
+use std::{fmt::Debug, time::Duration};
 
 use axum::http::Uri;
 use chromiumoxide::{
@@ -169,35 +165,88 @@ impl Drop for ChromiumScreenshotter {
     }
 }
 
-/// Dummy screenshotter for unit tests. Has an increasing counter and returns
-/// screenshot data which consists of the UTF-8 encoding of the text `webp
-/// screenshot N`, where `N` is the counter value and increases for each
-/// screenshot taken.
-#[derive(Debug)]
-pub struct TestScreenshotter {
-    /// Increasing counter used to assign unique numbers to returned screenshots
-    counter: AtomicU64,
-}
+#[cfg(test)]
+mod test_screenshotter {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
 
-impl TestScreenshotter {
-    /// Creates a test screenshotter.
-    pub fn new() -> TestScreenshotter {
-        TestScreenshotter {
-            counter: AtomicU64::new(0),
+    use super::{Screenshotter, TakeScreenshotJob, WebpScreenshotData};
+
+    /// Dummy screenshotter for unit tests. Has an increasing counter and returns
+    /// screenshot data which consists of the UTF-8 encoding of the text `webp
+    /// screenshot N`, where `N` is the counter value and increases for each
+    /// screenshot taken.
+    #[derive(Clone, Debug)]
+    pub struct TestScreenshotter {
+        /// Increasing counter used to assign unique numbers to returned screenshots
+        counter: Arc<AtomicU64>,
+    }
+
+    #[cfg(test)]
+    impl TestScreenshotter {
+        /// Creates a test screenshotter.
+        pub fn new() -> TestScreenshotter {
+            TestScreenshotter {
+                counter: Arc::new(AtomicU64::new(0)),
+            }
+        }
+
+        /// Returns the number of screenshots taken so far.
+        pub fn screenshots_taken(&self) -> u64 {
+            self.counter.load(Ordering::Relaxed)
+        }
+    }
+
+    #[cfg(test)]
+    impl Screenshotter for TestScreenshotter {
+        fn enqueue_job(&self, job: TakeScreenshotJob) {
+            job.result
+                .send(Ok(WebpScreenshotData(
+                    format!(
+                        "webp screenshot {}",
+                        self.counter.fetch_add(1, Ordering::Relaxed)
+                    )
+                    .into_bytes(),
+                )))
+                .unwrap();
         }
     }
 }
+#[cfg(test)]
+pub use test_screenshotter::TestScreenshotter;
 
-impl Screenshotter for TestScreenshotter {
-    fn enqueue_job(&self, job: TakeScreenshotJob) {
-        job.result
-            .send(Ok(WebpScreenshotData(
-                format!(
-                    "webp screenshot {}",
-                    self.counter.fetch_add(1, Ordering::Relaxed)
-                )
-                .into_bytes(),
-            )))
+#[cfg(test)]
+mod tests {
+    use axum::{Router, http::Uri, routing::get};
+    use sarlacc::Intern;
+    use tokio::sync::oneshot;
+
+    use super::{ChromiumScreenshotter, Screenshotter, TakeScreenshotJob};
+
+    #[tokio::test]
+    #[ignore = "requires Chromium to be installed"]
+    async fn chromium_screenshotter_captures_webp() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route("/", get(async || "test page")),
+            )
+            .await
             .unwrap();
+        });
+        let screenshotter = ChromiumScreenshotter::new().await.unwrap();
+        let site = Intern::new(format!("http://{address}").parse::<Uri>().unwrap());
+        let (result, screenshot) = oneshot::channel();
+
+        screenshotter.enqueue_job(TakeScreenshotJob { site, result });
+        let image = screenshot.await.unwrap().unwrap();
+
+        assert_eq!(b"RIFF", &image.0[..4]);
+        assert_eq!(b"WEBP", &image.0[8..12]);
+        server.abort();
     }
 }

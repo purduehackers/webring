@@ -199,3 +199,115 @@ impl SitePreviewCache {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{path::Path, sync::LazyLock, time::Duration};
+
+    use axum::http::Uri;
+    use pretty_assertions::assert_eq;
+    use sarlacc::Intern;
+    use tempfile::TempDir;
+    use tokio::{fs, time::timeout};
+
+    use crate::{
+        config::{Config, WebringTable},
+        site_previews::{SitePreviewCache, SitePreviewId, TestScreenshotter},
+    };
+
+    static URI: LazyLock<Intern<Uri>> =
+        LazyLock::new(|| Intern::new(Uri::from_static("https://example.com")));
+
+    fn test_config(cache_dir: &Path, cache_duration: Duration) -> Config {
+        Config {
+            webring: WebringTable {
+                cache_dir: cache_dir.to_owned(),
+                preview_cache_duration: cache_duration,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    async fn make_cache(
+        revalidation_period: Duration,
+    ) -> (TempDir, SitePreviewCache, SitePreviewId, TestScreenshotter) {
+        let temp_dir = TempDir::new().unwrap();
+        let config = test_config(temp_dir.path(), revalidation_period);
+        let screenshotter = TestScreenshotter::new();
+        let cache = SitePreviewCache::new(&config, Box::new(screenshotter.clone()))
+            .await
+            .unwrap();
+        let id = SitePreviewId::from_name("test member");
+        (temp_dir, cache, id, screenshotter)
+    }
+
+    async fn wait_for_cached_image(path: &Path, expected: &[u8]) {
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if fs::read(path)
+                    .await
+                    .is_ok_and(|contents| contents == expected)
+                {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("timed out waiting for cached screenshot");
+    }
+
+    #[test]
+    fn preview_ids_are_filename_safe() {
+        assert_eq!(
+            "letters-AND_0123------",
+            SitePreviewId::from_name("letters-AND_0123 /..!?").to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn creates_cache_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_dir = temp_dir.path().join("nested/cache");
+        let config = test_config(&cache_dir, Duration::from_mins(1));
+        assert!(!cache_dir.exists());
+        SitePreviewCache::new(&config, Box::new(TestScreenshotter::new()))
+            .await
+            .unwrap();
+        assert!(cache_dir.is_dir());
+    }
+
+    #[tokio::test]
+    async fn returns_fresh_cached_preview() {
+        let (_temp_dir, cache, id, screenshotter) = make_cache(Duration::from_hours(1)).await;
+        let path = cache.target_path(&id);
+        fs::write(&path, b"cached screenshot").await.unwrap();
+        let preview = cache.get_preview(&id, *URI).await;
+        assert_eq!(b"cached screenshot", preview.image.0.as_slice());
+        assert!(preview.expires_at > std::time::SystemTime::now());
+        assert_eq!(0, screenshotter.screenshots_taken());
+    }
+
+    #[tokio::test]
+    async fn returns_stale_preview_while_revalidating_it() {
+        let (_temp_dir, cache, id, screenshotter) = make_cache(Duration::ZERO).await;
+        let path = cache.target_path(&id);
+        fs::write(&path, b"stale screenshot").await.unwrap();
+        let preview = cache.get_preview(&id, *URI).await;
+        assert_eq!(b"stale screenshot", preview.image.0.as_slice());
+        wait_for_cached_image(&path, b"webp screenshot 0").await;
+        assert_eq!(1, screenshotter.screenshots_taken());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn deduplicates_concurrent_revalidations() {
+        let (_temp_dir, cache, id, screenshotter) = make_cache(Duration::ZERO).await;
+        // Since we're using the single-threaded runtime, these two calls will
+        // complete before the result gets processed by the background task.
+        cache.revalidate(&id, *URI);
+        cache.revalidate(&id, *URI);
+        assert_eq!(1, screenshotter.screenshots_taken());
+        wait_for_cached_image(&cache.target_path(&id), b"webp screenshot 0").await;
+    }
+}
