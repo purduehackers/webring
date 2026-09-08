@@ -639,6 +639,12 @@ mod tests {
         fs::write(static_dir.path().join("index.html"), "Hello homepage!")
             .await
             .unwrap();
+        fs::write(
+            static_dir.path().join("site_preview_placeholder.webp"),
+            b"placeholder image",
+        )
+        .await
+        .unwrap();
 
         let cache_dir = static_dir.path().join("cache");
         let config = toml::from_str(&format!(

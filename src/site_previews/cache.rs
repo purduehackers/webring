@@ -64,6 +64,8 @@ pub struct SitePreview {
 pub struct SitePreviewCache {
     /// Directory in which cached screenshots are stored
     cache_dir: PathBuf,
+    /// Path to the image returned when no cached screenshot is available
+    placeholder_path: PathBuf,
     /// Screenshotter used to take screenshots of sites
     screenshotter: Box<dyn Screenshotter>,
     /// Set which tracks which sites are currently being revalidated. Used to
@@ -89,8 +91,13 @@ impl SitePreviewCache {
         tokio::fs::create_dir_all(&config.webring.cache_dir)
             .await
             .wrap_err("failed to create screenshot cache directory")?;
+        let placeholder_path = config
+            .webring
+            .static_dir
+            .join("site_preview_placeholder.webp");
         Ok(SitePreviewCache {
             cache_dir: config.webring.cache_dir.clone(),
+            placeholder_path,
             revalidation_period: config.webring.preview_cache_duration,
             screenshotter,
             revalidating: Arc::new(HashSet::new()),
@@ -155,7 +162,19 @@ impl SitePreviewCache {
         }
         match maybe_preview {
             Some(preview) => preview,
-            None => todo!("return placeholder image"),
+            None => {
+                // Here we are okay with unwrapping because it is an error if
+                // there is no placeholder. The Axum server will catch the panic
+                // and return a 500 error, which is what we'd do manually if we
+                // returned a Result.
+                let image = tokio::fs::read(&self.placeholder_path)
+                    .await
+                    .expect("failed to read site preview placeholder");
+                SitePreview {
+                    image: WebpScreenshotData(image),
+                    expires_at: SystemTime::UNIX_EPOCH,
+                }
+            }
         }
     }
 
@@ -218,10 +237,11 @@ mod tests {
     static URI: LazyLock<Intern<Uri>> =
         LazyLock::new(|| Intern::new(Uri::from_static("https://example.com")));
 
-    fn test_config(cache_dir: &Path, cache_duration: Duration) -> Config {
+    fn test_config(cache_dir: &Path, static_dir: &Path, cache_duration: Duration) -> Config {
         Config {
             webring: WebringTable {
                 cache_dir: cache_dir.to_owned(),
+                static_dir: static_dir.to_owned(),
                 preview_cache_duration: cache_duration,
                 ..Default::default()
             },
@@ -233,7 +253,19 @@ mod tests {
         revalidation_period: Duration,
     ) -> (TempDir, SitePreviewCache, SitePreviewId, TestScreenshotter) {
         let temp_dir = TempDir::new().unwrap();
-        let config = test_config(temp_dir.path(), revalidation_period);
+        let static_dir = temp_dir.path().join("static");
+        fs::create_dir(&static_dir).await.unwrap();
+        fs::write(
+            static_dir.join("site_preview_placeholder.webp"),
+            b"placeholder image",
+        )
+        .await
+        .unwrap();
+        let config = test_config(
+            &temp_dir.path().join("cache"),
+            &static_dir,
+            revalidation_period,
+        );
         let screenshotter = TestScreenshotter::new();
         let cache = SitePreviewCache::new(&config, Box::new(screenshotter.clone()))
             .await
@@ -270,7 +302,7 @@ mod tests {
     async fn creates_cache_directory() {
         let temp_dir = TempDir::new().unwrap();
         let cache_dir = temp_dir.path().join("nested/cache");
-        let config = test_config(&cache_dir, Duration::from_mins(1));
+        let config = test_config(&cache_dir, temp_dir.path(), Duration::from_mins(1));
         assert!(!cache_dir.exists());
         SitePreviewCache::new(&config, Box::new(TestScreenshotter::new()))
             .await
@@ -287,6 +319,32 @@ mod tests {
         assert_eq!(b"cached screenshot", preview.image.0.as_slice());
         assert!(preview.expires_at > std::time::SystemTime::now());
         assert_eq!(0, screenshotter.screenshots_taken());
+    }
+
+    #[tokio::test]
+    async fn returns_placeholder_when_preview_is_not_cached() {
+        let (temp_dir, cache, id, screenshotter) = make_cache(Duration::from_hours(1)).await;
+
+        let first_preview = cache.get_preview(&id, *URI).await;
+        assert_eq!(b"placeholder image", first_preview.image.0.as_slice());
+
+        fs::write(
+            temp_dir.path().join("static/site_preview_placeholder.webp"),
+            b"updated placeholder image",
+        )
+        .await
+        .unwrap();
+        let other_id = SitePreviewId::from_name("another member");
+        let second_preview = cache.get_preview(&other_id, *URI).await;
+
+        assert_eq!(
+            b"updated placeholder image",
+            second_preview.image.0.as_slice()
+        );
+        assert!(second_preview.expires_at <= std::time::SystemTime::now());
+        assert_eq!(2, screenshotter.screenshots_taken());
+        wait_for_cached_image(&cache.target_path(&id), b"webp screenshot 0").await;
+        wait_for_cached_image(&cache.target_path(&other_id), b"webp screenshot 1").await;
     }
 
     #[tokio::test]
