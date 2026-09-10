@@ -1,5 +1,5 @@
 /*
-Copyright (C) 2025 Kian Kasad
+Copyright (C) 2025 Kian Kasad and Amber Zeng
 
 This file is part of the Purdue Hackers webring.
 
@@ -16,51 +16,6 @@ for more details.
 You should have received a copy of the GNU Affero General Public License along
 with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 */
-
-let isFlipEnabled = false;
-let isAusFlipEnabled = false;
-
-function updateFlipState() {
-    const transforms = [];
-    if (isFlipEnabled) {
-        transforms.push("scaleX(-1)");
-    }
-    if (isAusFlipEnabled) {
-        transforms.push("scaleY(-1)");
-    }
-    document.body.style.transform = transforms.join(" ");
-
-    const links = document.getElementsByTagName("a");
-    for (const link of links) {
-        const originalHref = link.dataset.originalHref || link.href;
-        link.dataset.originalHref = originalHref;
-
-        if (!isFlipEnabled && !isAusFlipEnabled) {
-            link.href = originalHref;
-            continue;
-        }
-
-        const params = new URLSearchParams({ url: originalHref });
-        if (isFlipEnabled) {
-            params.set("horizontal", "true");
-        }
-        if (isAusFlipEnabled) {
-            params.set("vertical", "true");
-        }
-        link.href = "/flip?" + params.toString();
-    }
-}
-
-// Kept as global functions for compatibility with existing bookmarks/scripts.
-function setFlip(flip) {
-    isFlipEnabled = flip;
-    updateFlipState();
-}
-
-function setAusFlip(flip) {
-    isAusFlipEnabled = flip;
-    updateFlipState();
-}
 
 function initOutboundLinkTracking() {
     document.querySelectorAll("a").forEach(link => {
