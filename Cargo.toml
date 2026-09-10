@@ -47,6 +47,7 @@ indexmap = { version = "2.10.0", default-features = false, features = ["serde"] 
 indoc = "2.0.6"
 lol_html = "2.6.0"
 notify = "8.2.0"
+palette = { version = "0.7.7", default-features = false, features = ["std"] }
 papaya = { version = "0.2.3", features = ["serde"] }
 rand = { version = "0.10.0", default-features = false, features = [ "thread_rng" ]}
 reqwest = { version = "0.13.0", features = ["stream", "json", "query"] }
@@ -65,6 +66,7 @@ tower-http = { version = "0.6.6", features = ["cors", "fs", "catch-panic", "trac
 tracing = "0.1.41"
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.20", features = ["tracing-log"] }
+webp = { version = "0.3.1", default-features = false }
 
 [dev-dependencies]
 http-body-util = "0.1.3"

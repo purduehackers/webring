@@ -1,4 +1,4 @@
-//! Site preview screenshot generation and caching.
+//! Site preview screenshot handling.
 
 mod cache;
 mod capture;

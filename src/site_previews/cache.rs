@@ -1,8 +1,8 @@
 //! Site screenshot cache
 
 use std::{
-    fmt::{Display, Formatter},
     io::ErrorKind,
+    ops::Deref,
     path::PathBuf,
     sync::Arc,
     time::{Duration, SystemTime},
@@ -17,16 +17,17 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     config::Config,
-    site_previews::capture::{Screenshotter, WebpScreenshotData},
+    site_previews::capture::{FallbackImageGenerator, Screenshotter, WebpScreenshotData},
 };
 
 /// A filename-safe ID to represent a site preview.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SitePreviewId(String);
 
-impl Display for SitePreviewId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+impl Deref for SitePreviewId {
+    type Target = String;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -64,8 +65,6 @@ pub struct SitePreview {
 pub struct SitePreviewCache {
     /// Directory in which cached screenshots are stored
     cache_dir: PathBuf,
-    /// Path to the image returned when no cached screenshot is available
-    placeholder_path: PathBuf,
     /// Screenshotter used to take screenshots of sites
     screenshotter: Box<dyn Screenshotter>,
     /// Set which tracks which sites are currently being revalidated. Used to
@@ -91,13 +90,8 @@ impl SitePreviewCache {
         tokio::fs::create_dir_all(&config.webring.cache_dir)
             .await
             .wrap_err("failed to create screenshot cache directory")?;
-        let placeholder_path = config
-            .webring
-            .static_dir
-            .join("site_preview_placeholder.webp");
         Ok(SitePreviewCache {
             cache_dir: config.webring.cache_dir.clone(),
-            placeholder_path,
             revalidation_period: config.webring.preview_cache_duration,
             screenshotter,
             revalidating: Arc::new(HashSet::new()),
@@ -123,7 +117,7 @@ impl SitePreviewCache {
         };
         let maybe_preview = match file {
             None => {
-                warn!(%id, "no screenshot for site; returning placeholder");
+                warn!(id = %**id, "no screenshot for site; returning placeholder");
                 None
             }
             Some(mut file) => {
@@ -138,7 +132,7 @@ impl SitePreviewCache {
                     file.read_to_end(&mut buf)
                         .await
                         .wrap_err("failed to read cached screenshot file")?;
-                    debug!(%id, "cached screenshot hit");
+                    debug!(id = %**id, "cached screenshot hit");
                     Ok(SitePreview {
                         image: WebpScreenshotData(buf),
                         expires_at,
@@ -163,15 +157,12 @@ impl SitePreviewCache {
         match maybe_preview {
             Some(preview) => preview,
             None => {
-                // Here we are okay with unwrapping because it is an error if
-                // there is no placeholder. The Axum server will catch the panic
-                // and return a 500 error, which is what we'd do manually if we
-                // returned a Result.
-                let image = tokio::fs::read(&self.placeholder_path)
+                let image = FallbackImageGenerator
+                    .take_screenshot(uri)
                     .await
-                    .expect("failed to read site preview placeholder");
+                    .expect("fallback screenshotter failed");
                 SitePreview {
-                    image: WebpScreenshotData(image),
+                    image,
                     expires_at: SystemTime::UNIX_EPOCH,
                 }
             }
@@ -190,7 +181,7 @@ impl SitePreviewCache {
         if !self.revalidating.pin().insert(id.clone()) {
             return;
         }
-        info!(%id, ?uri, "requesting screenshot of site");
+        info!(id = %**id, ?uri, "requesting screenshot of site");
         let screenshot_result = self.screenshotter.take_screenshot(uri);
         let target_path = self.target_path(id);
         let revalidating = Arc::clone(&self.revalidating);
@@ -215,7 +206,11 @@ impl SitePreviewCache {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, sync::LazyLock, time::Duration};
+    use std::{
+        path::Path,
+        sync::LazyLock,
+        time::{Duration, SystemTime},
+    };
 
     use axum::http::Uri;
     use pretty_assertions::assert_eq;
@@ -225,7 +220,10 @@ mod tests {
 
     use crate::{
         config::{Config, WebringTable},
-        site_previews::{SitePreviewCache, SitePreviewId, TestScreenshotter},
+        site_previews::{
+            SitePreviewCache, SitePreviewId, TestScreenshotter,
+            capture::{FallbackImageGenerator, Screenshotter},
+        },
     };
 
     static URI: LazyLock<Intern<Uri>> =
@@ -249,12 +247,6 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let static_dir = temp_dir.path().join("static");
         fs::create_dir(&static_dir).await.unwrap();
-        fs::write(
-            static_dir.join("site_preview_placeholder.webp"),
-            b"placeholder image",
-        )
-        .await
-        .unwrap();
         let config = test_config(
             &temp_dir.path().join("cache"),
             &static_dir,
@@ -317,28 +309,21 @@ mod tests {
 
     #[tokio::test]
     async fn returns_placeholder_when_preview_is_not_cached() {
-        let (temp_dir, cache, id, screenshotter) = make_cache(Duration::from_hours(1)).await;
+        let (_temp_dir, cache, id, screenshotter) = make_cache(Duration::from_hours(1)).await;
 
         let first_preview = cache.get_preview(&id, *URI).await;
-        assert_eq!(b"placeholder image", first_preview.image.0.as_slice());
+        let expected_image = FallbackImageGenerator.take_screenshot(*URI).await.unwrap();
 
-        fs::write(
-            temp_dir.path().join("static/site_preview_placeholder.webp"),
-            b"updated placeholder image",
-        )
-        .await
-        .unwrap();
-        let other_id = SitePreviewId::from_name("another member");
-        let second_preview = cache.get_preview(&other_id, *URI).await;
-
+        // Should return placeholder with no cache duration
         assert_eq!(
-            b"updated placeholder image",
-            second_preview.image.0.as_slice()
+            expected_image.0, first_preview.image.0,
+            "first preview image doesn't match expected"
         );
-        assert!(second_preview.expires_at <= std::time::SystemTime::now());
-        assert_eq!(2, screenshotter.screenshots_taken());
+        assert!(first_preview.expires_at <= SystemTime::now());
+
+        // Should trigger a screenshot to be taken asynchronously
+        assert_eq!(1, screenshotter.screenshots_taken());
         wait_for_cached_image(&cache.target_path(&id), b"webp screenshot 0").await;
-        wait_for_cached_image(&cache.target_path(&other_id), b"webp screenshot 1").await;
     }
 
     #[tokio::test]

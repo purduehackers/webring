@@ -21,44 +21,32 @@ use tokio::{
 };
 use tracing::{error, info, instrument};
 
+use crate::site_previews::capture::{Screenshotter, WebpScreenshotData};
+
 /// Viewport for Chromium screenshots
 const VIEWPORT: Viewport = Viewport {
-    width: 1440,
-    height: 910,
-    is_landscape: true,
+    width: super::WIDTH as u32,
+    height: super::HEIGHT as u32,
+    is_landscape: super::WIDTH >= super::HEIGHT,
     device_scale_factor: None,
     emulating_mobile: false,
     has_touch: false,
 };
 
-/// Typed wrapper for WebP image data.
-#[derive(Debug)]
-pub struct WebpScreenshotData(pub Vec<u8>);
-
 /// Represents a queued screenshot-taking request.
 #[derive(Debug)]
-struct TakeScreenshotJob {
+struct Job {
     /// URI of the site to take a screenshot of.
     pub site: Intern<Uri>,
     /// Write end of a channel on which the result should be submitted once done.
     pub result: oneshot::Sender<eyre::Result<WebpScreenshotData>>,
 }
 
-/// Interface implemented by objects which can take screenshots of sites.
-pub trait Screenshotter: Debug + Send + Sync {
-    /// Enqueues a screenshot-taking job for the screenshotter to process at its
-    /// discretion.
-    fn take_screenshot(
-        &self,
-        site: Intern<Uri>,
-    ) -> Pin<Box<dyn Future<Output = eyre::Result<WebpScreenshotData>> + Send + Sync + 'static>>;
-}
-
 /// Screenshotter which uses Chromium via [`chromiumoxide`].
 #[derive(Debug)]
 pub struct ChromiumScreenshotter {
     /// Write end of channel used to submit jobs to the screenshot processor task.
-    jobs: tokio::sync::mpsc::UnboundedSender<TakeScreenshotJob>,
+    jobs: tokio::sync::mpsc::UnboundedSender<Job>,
     /// Handles on the background tasks that are part of this screenshotter.
     tasks: [AbortHandle; 2],
 }
@@ -104,7 +92,7 @@ impl ChromiumScreenshotter {
 
     /// Runs the processing loop which reads jobs from the queue and handles
     /// them using the browser.
-    async fn run(browser: Browser, mut receiver: mpsc::UnboundedReceiver<TakeScreenshotJob>) {
+    async fn run(browser: Browser, mut receiver: mpsc::UnboundedReceiver<Job>) {
         while let Some(job) = receiver.recv().await {
             let result = ChromiumScreenshotter::capture_screenshot(&browser, job.site).await;
             // We don't care if the caller is no longer waiting for the result
@@ -162,7 +150,7 @@ impl Screenshotter for ChromiumScreenshotter {
         let (tx, rx) = oneshot::channel();
         let submit_result = self
             .jobs
-            .send(TakeScreenshotJob { site, result: tx })
+            .send(Job { site, result: tx })
             .wrap_err("screenshotter processor task has died");
         Box::pin(async move {
             let () = submit_result?;
@@ -179,67 +167,6 @@ impl Drop for ChromiumScreenshotter {
         // Since the tasks own the [Browser], it will be dropped when they abort.
     }
 }
-
-#[cfg(test)]
-mod test_screenshotter {
-    #[cfg(test)]
-    use std::pin::Pin;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    };
-
-    #[cfg(test)]
-    use axum::http::Uri;
-    #[cfg(test)]
-    use sarlacc::Intern;
-
-    use super::{Screenshotter, WebpScreenshotData};
-
-    /// Dummy screenshotter for unit tests. Has an increasing counter and returns
-    /// screenshot data which consists of the UTF-8 encoding of the text `webp
-    /// screenshot N`, where `N` is the counter value and increases for each
-    /// screenshot taken.
-    #[derive(Clone, Debug)]
-    pub struct TestScreenshotter {
-        /// Increasing counter used to assign unique numbers to returned screenshots
-        counter: Arc<AtomicU64>,
-    }
-
-    #[cfg(test)]
-    impl TestScreenshotter {
-        /// Creates a test screenshotter.
-        pub fn new() -> TestScreenshotter {
-            TestScreenshotter {
-                counter: Arc::new(AtomicU64::new(0)),
-            }
-        }
-
-        /// Returns the number of screenshots taken so far.
-        pub fn screenshots_taken(&self) -> u64 {
-            self.counter.load(Ordering::Relaxed)
-        }
-    }
-
-    #[cfg(test)]
-    impl Screenshotter for TestScreenshotter {
-        fn take_screenshot(
-            &self,
-            _site: Intern<Uri>,
-        ) -> Pin<Box<dyn Future<Output = eyre::Result<WebpScreenshotData>> + Send + Sync + 'static>>
-        {
-            Box::pin(std::future::ready(Ok(WebpScreenshotData(
-                format!(
-                    "webp screenshot {}",
-                    self.counter.fetch_add(1, Ordering::Relaxed)
-                )
-                .into_bytes(),
-            ))))
-        }
-    }
-}
-#[cfg(test)]
-pub use test_screenshotter::TestScreenshotter;
 
 #[cfg(test)]
 mod tests {
