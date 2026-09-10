@@ -1,6 +1,6 @@
 //! Capture member website previews with Chromium.
 
-use std::{fmt::Debug, time::Duration};
+use std::{fmt::Debug, pin::Pin, time::Duration};
 
 use axum::http::Uri;
 use chromiumoxide::{
@@ -37,7 +37,7 @@ pub struct WebpScreenshotData(pub Vec<u8>);
 
 /// Represents a queued screenshot-taking request.
 #[derive(Debug)]
-pub struct TakeScreenshotJob {
+struct TakeScreenshotJob {
     /// URI of the site to take a screenshot of.
     pub site: Intern<Uri>,
     /// Write end of a channel on which the result should be submitted once done.
@@ -48,7 +48,10 @@ pub struct TakeScreenshotJob {
 pub trait Screenshotter: Debug + Send + Sync {
     /// Enqueues a screenshot-taking job for the screenshotter to process at its
     /// discretion.
-    fn enqueue_job(&self, job: TakeScreenshotJob);
+    fn take_screenshot(
+        &self,
+        site: Intern<Uri>,
+    ) -> Pin<Box<dyn Future<Output = eyre::Result<WebpScreenshotData>> + Send + Sync + 'static>>;
 }
 
 /// Screenshotter which uses Chromium via [`chromiumoxide`].
@@ -151,8 +154,20 @@ impl ChromiumScreenshotter {
 }
 
 impl Screenshotter for ChromiumScreenshotter {
-    fn enqueue_job(&self, job: TakeScreenshotJob) {
-        let _ = self.jobs.send(job);
+    fn take_screenshot(
+        &self,
+        site: Intern<Uri>,
+    ) -> Pin<Box<dyn Future<Output = eyre::Result<WebpScreenshotData>> + Send + Sync + 'static>>
+    {
+        let (tx, rx) = oneshot::channel();
+        let submit_result = self
+            .jobs
+            .send(TakeScreenshotJob { site, result: tx })
+            .wrap_err("screenshotter processor task has died");
+        Box::pin(async move {
+            let () = submit_result?;
+            rx.await.wrap_err("screenshotter processor task has died")?
+        })
     }
 }
 
@@ -167,12 +182,19 @@ impl Drop for ChromiumScreenshotter {
 
 #[cfg(test)]
 mod test_screenshotter {
+    #[cfg(test)]
+    use std::pin::Pin;
     use std::sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     };
 
-    use super::{Screenshotter, TakeScreenshotJob, WebpScreenshotData};
+    #[cfg(test)]
+    use axum::http::Uri;
+    #[cfg(test)]
+    use sarlacc::Intern;
+
+    use super::{Screenshotter, WebpScreenshotData};
 
     /// Dummy screenshotter for unit tests. Has an increasing counter and returns
     /// screenshot data which consists of the UTF-8 encoding of the text `webp
@@ -201,16 +223,18 @@ mod test_screenshotter {
 
     #[cfg(test)]
     impl Screenshotter for TestScreenshotter {
-        fn enqueue_job(&self, job: TakeScreenshotJob) {
-            job.result
-                .send(Ok(WebpScreenshotData(
-                    format!(
-                        "webp screenshot {}",
-                        self.counter.fetch_add(1, Ordering::Relaxed)
-                    )
-                    .into_bytes(),
-                )))
-                .unwrap();
+        fn take_screenshot(
+            &self,
+            _site: Intern<Uri>,
+        ) -> Pin<Box<dyn Future<Output = eyre::Result<WebpScreenshotData>> + Send + Sync + 'static>>
+        {
+            Box::pin(std::future::ready(Ok(WebpScreenshotData(
+                format!(
+                    "webp screenshot {}",
+                    self.counter.fetch_add(1, Ordering::Relaxed)
+                )
+                .into_bytes(),
+            ))))
         }
     }
 }
@@ -221,9 +245,8 @@ pub use test_screenshotter::TestScreenshotter;
 mod tests {
     use axum::{Router, http::Uri, routing::get};
     use sarlacc::Intern;
-    use tokio::sync::oneshot;
 
-    use super::{ChromiumScreenshotter, Screenshotter, TakeScreenshotJob};
+    use super::{ChromiumScreenshotter, Screenshotter};
 
     #[tokio::test]
     #[ignore = "requires Chromium to be installed"]
@@ -240,10 +263,8 @@ mod tests {
         });
         let screenshotter = ChromiumScreenshotter::new().await.unwrap();
         let site = Intern::new(format!("http://{address}").parse::<Uri>().unwrap());
-        let (result, screenshot) = oneshot::channel();
 
-        screenshotter.enqueue_job(TakeScreenshotJob { site, result });
-        let image = screenshot.await.unwrap().unwrap();
+        let image = screenshotter.take_screenshot(site).await.unwrap();
 
         assert_eq!(b"RIFF", &image.0[..4]);
         assert_eq!(b"WEBP", &image.0[8..12]);

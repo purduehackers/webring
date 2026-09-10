@@ -17,7 +17,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     config::Config,
-    site_previews::capture::{Screenshotter, TakeScreenshotJob, WebpScreenshotData},
+    site_previews::capture::{Screenshotter, WebpScreenshotData},
 };
 
 /// A filename-safe ID to represent a site preview.
@@ -191,27 +191,21 @@ impl SitePreviewCache {
             return;
         }
         info!(%id, ?uri, "requesting screenshot of site");
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.screenshotter.enqueue_job(TakeScreenshotJob {
-            site: uri,
-            result: tx,
-        });
+        let screenshot_result = self.screenshotter.take_screenshot(uri);
         let target_path = self.target_path(id);
         let revalidating = Arc::clone(&self.revalidating);
         let id = id.clone();
         tokio::task::spawn(async move {
-            if let Ok(result) = rx.await {
-                // The code in this block must not return early because removing
-                // the revalidating marker happens afterwards.
-                match result {
-                    Ok(image) => {
-                        if let Err(err) = tokio::fs::write(&target_path, &image.0).await {
-                            error!(err = %format_args!("{err:#}"), ?target_path, "failed to save screenshot image");
-                        }
+            // The code in this block must not return early because removing
+            // the revalidating marker happens afterwards.
+            match screenshot_result.await {
+                Ok(image) => {
+                    if let Err(err) = tokio::fs::write(&target_path, &image.0).await {
+                        error!(err = %format_args!("{err:#}"), ?target_path, "failed to save screenshot image");
                     }
-                    Err(err) => {
-                        error!(err = %format_args!("{err:#}"), %uri, "failed to take screenshot");
-                    }
+                }
+                Err(err) => {
+                    error!(err = %format_args!("{err:#}"), %uri, "failed to take screenshot");
                 }
             }
             revalidating.pin().remove(&id);
