@@ -46,6 +46,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
     --card-half-height: min(280px, 25.05svh, 25.665vw);
     --control-gap: min(24px, 2.15svh, 1.39vw);
     --control-size: min(36px, 3.22svh, 2.08vw);
+    --grid-cell-size: 10px;
     --side-shift: min(calc(52.635vw + 20px), calc(81.4svh + 20px));
     --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 }
@@ -73,29 +74,22 @@ body {
     font-family: "PolySans Slim", Arial, sans-serif;
 }
 
-/*
- * Figma asset placeholder: replace this procedural fallback with the final
- * paper texture when it is available. Keep the texture decorative so it does
- * not affect reading order or pointer interaction.
- */
-.grain {
+.grid-background {
     position: fixed;
     z-index: 0;
     inset: 0;
     pointer-events: none;
-    opacity: 0.25;
-    mix-blend-mode: multiply;
-    transition: opacity 220ms var(--ease-out);
+    background-image:
+        linear-gradient(to right, rgb(0 0 0 / 7%) 1px, transparent 1px),
+        linear-gradient(to bottom, rgb(0 0 0 / 7%) 1px, transparent 1px);
+    background-size: var(--grid-cell-size) var(--grid-cell-size);
 }
 
-.grain img {
-    object-fit: cover;
+.life-background {
+    display: block;
     width: 100%;
     height: 100%;
-}
-
-body.view-switching .grain {
-    opacity: 0.36;
+    opacity: 0.7;
 }
 
 #site-header,
@@ -105,7 +99,7 @@ main {
 }
 
 #site-header {
-    position: absolute;
+    position: fixed;
     z-index: 2;
     top: 0;
     left: 0;
@@ -179,8 +173,9 @@ main {
     gap: 2px;
     margin: 0;
     padding: 2px;
+    border: 1px solid rgb(0 0 0 / 10%);
     border-radius: 0;
-    background: rgb(0 0 0 / 8%);
+    background: var(--paper);
 }
 
 .view-toggle-button {
@@ -215,6 +210,7 @@ main {
 }
 
 main {
+    display: flow-root;
     width: 100%;
     min-height: 100svh;
     padding: 0;
@@ -396,9 +392,11 @@ main {
 .list-view {
     position: relative;
     width: min(760px, calc(100vw - 48px));
-    margin: 0 auto;
-    padding-top: clamp(150px, 22vh, 240px);
-    padding-bottom: 80px;
+    margin: clamp(150px, 22vh, 240px) auto 80px;
+    padding: 28px;
+    border: 1px solid rgb(0 0 0 / 10%);
+    border-radius: 0;
+    background: var(--paper);
 }
 
 .list-heading-row {
@@ -578,7 +576,8 @@ main {
 
     .list-view {
         width: calc(100vw - 40px);
-        padding-top: 72px;
+        margin: 72px auto 48px;
+        padding: 24px;
     }
 
     .member-list-row {
@@ -677,9 +676,12 @@ main {
     .carousel-slide,
     .preview-frame,
     .member-list-preview,
-    .view,
-    .grain {
+    .view {
         animation: none;
         transition: none;
+    }
+
+    .life-background {
+        display: none;
     }
 }

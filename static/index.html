@@ -32,7 +32,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
         />
         <link
             rel="stylesheet"
-            href="/static/style.css"
+            href="/static/style.css?v=2"
         />
 
         <meta
@@ -74,7 +74,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 
         <script
             defer
-            src="/static/index.js"
+            src="/static/index.js?v=2"
         ></script>
 
         <script
@@ -85,19 +85,11 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
     </head>
 
     <body>
-        <!--
-        Figma asset placeholder: the design uses a paper texture here. The
-        local CSS grain below keeps the page usable without a remote asset;
-        replace it with the final texture URL when one is available.
-    -->
         <div
-            class="grain"
+            class="grid-background"
             aria-hidden="true"
         >
-            <img
-                src="/static/grain.jpg"
-                aria-hidden="true"
-            />
+            <canvas class="life-background"></canvas>
         </div>
 
         <header id="site-header">

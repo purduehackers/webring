@@ -33,13 +33,16 @@ function initListPreviewCursor() {
             return;
         }
 
-        row.addEventListener("pointermove", event => {
+        function movePreview(event) {
             if (event.pointerType && event.pointerType !== "mouse") {
                 return;
             }
-            preview.style.setProperty("--preview-x", `${event.clientX}px`);
-            preview.style.setProperty("--preview-y", `${event.clientY}px`);
-        });
+            preview.style.left = `${event.clientX}px`;
+            preview.style.top = `${event.clientY}px`;
+        }
+
+        row.addEventListener("pointermove", movePreview);
+        row.addEventListener("mousemove", movePreview);
     });
 }
 
@@ -159,8 +162,22 @@ function initCarousel() {
         render();
     }
 
-    prevBtn?.addEventListener("click", showPrevious);
-    nextBtn?.addEventListener("click", showNext);
+    const clickSound = new Audio("/static/click.mp3");
+    clickSound.preload = "auto";
+
+    function playClick() {
+        clickSound.currentTime = 0;
+        clickSound.play().catch(() => {});
+    }
+
+    prevBtn?.addEventListener("click", () => {
+        playClick();
+        showPrevious();
+    });
+    nextBtn?.addEventListener("click", () => {
+        playClick();
+        showNext();
+    });
 
     const carouselTrack = carousel.querySelector(".carousel-track");
 
@@ -296,6 +313,7 @@ function initCarousel() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+    initGameOfLife();
     initOutboundLinkTracking();
     initListPreviewCursor();
     initViewToggle();

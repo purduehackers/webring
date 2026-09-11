@@ -1,0 +1,32 @@
+# Copyright (C) 2025 Kian Kasad and Henry Rovnyak
+#
+# This file is part of the Purdue Hackers webring.
+#
+# The Purdue Hackers webring is free software: you can redistribute it and/or
+# modify it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# The Purdue Hackers webring is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
+# for more details.
+#
+# You should have received a copy of the GNU Affero General Public License along
+# with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
+
+[webring]
+# base-url = "https://ring.purduehackers.com"
+base-url = "http://127.0.0.1:3000"
+static-dir = "static"                                                                                                                                                    
+cache-dir = "cache"
+[network]
+listen-addr = "127.0.0.1:3000"
+[logging]
+verbosity = "info"                                                                                                                                                      
+
+[members]
+henry = { url = "https://hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }
+kian = { url = "https://kasad.com", discord-id = 456, check-level = "none" }
+ericswpark = { url = "https://ericswpark.com", discord-id = 789, check-level = "none", enrollment = "alum" }
+amber = { url = "https://amberzeng.com", discord-id = 101, check-level = "none" }
