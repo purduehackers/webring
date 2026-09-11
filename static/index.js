@@ -37,10 +37,13 @@ function initListPreviewCursor() {
             if (event.pointerType && event.pointerType !== "mouse") {
                 return;
             }
-            preview.style.left = `${event.clientX}px`;
-            preview.style.top = `${event.clientY}px`;
+            preview.style.position = "fixed";
+            preview.style.transform = "none";
+            preview.style.left = `${event.clientX - preview.offsetWidth - 12}px`;
+            preview.style.top = `${event.clientY - preview.offsetHeight - 12}px`;
         }
 
+        row.addEventListener("pointerenter", movePreview);
         row.addEventListener("pointermove", movePreview);
         row.addEventListener("mousemove", movePreview);
     });
@@ -105,8 +108,19 @@ function initViewToggle() {
         }
     }
 
+    const toggleSound = new Audio("/static/click2.mp3");
+    toggleSound.preload = "auto";
+
+    function playToggleSound() {
+        toggleSound.currentTime = 0;
+        toggleSound.play().catch(() => {});
+    }
+
     buttons.forEach(button => {
-        button.addEventListener("click", () => setView(button.dataset.view));
+        button.addEventListener("click", () => {
+            playToggleSound();
+            setView(button.dataset.view);
+        });
     });
     setView(savedView, false);
 }
@@ -122,14 +136,6 @@ function initCarousel() {
     const nextBtn = document.getElementById("next-btn");
     const carousel = document.querySelector(".carousel");
     let current = 0;
-    let pointerStartX = null;
-    let pointerCurrentX = null;
-    let isDragging = false;
-    let currentTranslate = 0;
-    let prevTranslate = 0;
-    let animationFrameId = null;
-    let suppressClick = false;
-    let wheelTimeout; // debounce timer for wheel snapping
 
     function memberName(slide) {
         return slide.querySelector(".preview-frame")?.dataset.umamiEventName || "";
@@ -164,6 +170,7 @@ function initCarousel() {
 
     const clickSound = new Audio("/static/click.mp3");
     clickSound.preload = "auto";
+    clickSound.volume = 0.5;
 
     function playClick() {
         clickSound.currentTime = 0;
@@ -178,125 +185,6 @@ function initCarousel() {
         playClick();
         showNext();
     });
-
-    const carouselTrack = carousel.querySelector(".carousel-track");
-
-    function setSliderPosition() {
-        carouselTrack.style.transform = `translateX(${currentTranslate}px)`;
-    }
-
-    function animation() {
-        setSliderPosition();
-        if (isDragging) {
-            animationFrameId = requestAnimationFrame(animation);
-        }
-    }
-
-    function clamp(value, min, max) {
-        return Math.min(Math.max(value, min), max);
-    }
-
-    carousel?.addEventListener("pointerdown", event => {
-        pointerStartX = event.clientX;
-        pointerCurrentX = pointerStartX;
-        isDragging = true;
-        carousel.classList.add("is-dragging");
-        carousel.setPointerCapture?.(event.pointerId);
-
-        // Calculate currentTranslate based on current active slide
-        currentTranslate = -current * carousel.clientWidth;
-        prevTranslate = currentTranslate;
-        animationFrameId = requestAnimationFrame(animation);
-    });
-
-    carousel?.addEventListener("pointermove", event => {
-        if (!isDragging) return;
-        pointerCurrentX = event.clientX;
-        const deltaX = pointerCurrentX - pointerStartX;
-        currentTranslate = clamp(
-            prevTranslate + deltaX,
-            -((slides.length - 1) * carousel.clientWidth),
-            0,
-        );
-    });
-
-    carousel?.addEventListener("pointerup", event => {
-        if (!isDragging) return;
-        isDragging = false;
-        cancelAnimationFrame(animationFrameId);
-
-        const deltaX = event.clientX - pointerStartX;
-        carousel.classList.remove("is-dragging");
-
-        // Snap to closest slide index
-        const movedSlides = Math.round(-currentTranslate / carousel.clientWidth);
-        current = clamp(movedSlides, 0, slides.length - 1);
-
-        // Reset translate to snapped slide
-        currentTranslate = -current * carousel.clientWidth;
-        setSliderPosition();
-
-        suppressClick = Math.abs(deltaX) > 10;
-
-        render();
-    });
-
-    carousel?.addEventListener("pointercancel", () => {
-        if (!isDragging) return;
-        isDragging = false;
-        cancelAnimationFrame(animationFrameId);
-        currentTranslate = -current * carousel.clientWidth;
-        setSliderPosition();
-        carousel.classList.remove("is-dragging");
-    });
-
-    carousel?.addEventListener(
-        "wheel",
-        event => {
-            const horizontalDistance =
-                Math.abs(event.deltaX) > Math.abs(event.deltaY)
-                    ? event.deltaX
-                    : event.shiftKey
-                      ? event.deltaY
-                      : 0;
-
-            if (!horizontalDistance) {
-                return;
-            }
-
-            event.preventDefault();
-
-            // Adjust currentTranslate immediately based on wheel delta
-            currentTranslate = clamp(
-                currentTranslate - horizontalDistance,
-                -((slides.length - 1) * carousel.clientWidth),
-                0,
-            );
-            setSliderPosition();
-
-            // Debounce snapping to slide when wheel scroll stops
-            clearTimeout(wheelTimeout);
-            wheelTimeout = setTimeout(() => {
-                const movedSlides = Math.round(-currentTranslate / carousel.clientWidth);
-                current = clamp(movedSlides, 0, slides.length - 1);
-                currentTranslate = -current * carousel.clientWidth;
-                setSliderPosition();
-                render();
-            }, 100);
-        },
-        { passive: false },
-    );
-
-    carousel?.addEventListener(
-        "click",
-        event => {
-            if (suppressClick) {
-                event.preventDefault();
-                suppressClick = false;
-            }
-        },
-        true,
-    );
 
     document.addEventListener("keydown", event => {
         if (!document.getElementById("list-view")?.hidden) {
@@ -313,7 +201,6 @@ function initCarousel() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-    initGameOfLife();
     initOutboundLinkTracking();
     initListPreviewCursor();
     initViewToggle();

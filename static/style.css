@@ -41,12 +41,13 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 :root {
     --ink: #000;
     --accent: #ffcc00;
+    --accent-trans: rgba(255, 204, 0, 0.3);
     --paper: #fff;
     --control: #e7e7e7;
     --card-half-height: min(280px, 25.05svh, 25.665vw);
     --control-gap: min(24px, 2.15svh, 1.39vw);
     --control-size: min(36px, 3.22svh, 2.08vw);
-    --grid-cell-size: 10px;
+    --carousel-group-shift: calc((var(--control-gap) + var(--control-size)) / 2);
     --side-shift: min(calc(52.635vw + 20px), calc(81.4svh + 20px));
     --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 }
@@ -79,17 +80,16 @@ body {
     z-index: 0;
     inset: 0;
     pointer-events: none;
+
+    /*
     background-image:
         linear-gradient(to right, rgb(0 0 0 / 7%) 1px, transparent 1px),
         linear-gradient(to bottom, rgb(0 0 0 / 7%) 1px, transparent 1px);
-    background-size: var(--grid-cell-size) var(--grid-cell-size);
-}
-
-.life-background {
-    display: block;
-    width: 100%;
-    height: 100%;
-    opacity: 0.7;
+    background-size: 10px 10px;
+    */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch' result='noise'/%3E%3CfeColorMatrix in='noise' type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='.5'/%3E%3C/svg%3E");
+    background-size: 160px 160px;
+    opacity: 0.25;
 }
 
 #site-header,
@@ -166,14 +166,17 @@ main {
     position: fixed;
     z-index: 4;
     top: 24px;
+    bottom: auto;
     left: 50%;
     transform: translateX(-50%);
     display: inline-flex;
-    justify-content: flex-end;
-    gap: 2px;
+    width: 56px;
+    height: 28px;
+    justify-content: stretch;
+    gap: 0;
     margin: 0;
-    padding: 2px;
-    border: 1px solid rgb(0 0 0 / 10%);
+    padding: 0;
+    border: 2px solid #888;
     border-radius: 0;
     background: var(--paper);
 }
@@ -182,13 +185,14 @@ main {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 24px;
+    flex: 1;
+    width: 50%;
+    height: 100%;
     padding: 0;
     border: 0;
     border-radius: 0;
-    background: transparent;
-    color: rgb(0 0 0 / 48%);
+    background:  #888;
+    color: var(--paper);
     cursor: pointer;
 }
 
@@ -200,8 +204,7 @@ main {
 
 .view-toggle-button[aria-pressed="true"] {
     background: var(--paper);
-    color: var(--ink);
-    box-shadow: 0 1px 2px rgb(0 0 0 / 10%);
+    color:  #888;
 }
 
 .view-toggle-button:focus-visible {
@@ -251,12 +254,10 @@ main {
 
 .carousel {
     position: absolute;
-    top: 50%;
+    top: calc(50% - var(--carousel-group-shift));
     left: 0;
     width: 100%;
     height: 560px;
-    touch-action: pan-y;
-    cursor: grab;
     transform: translateY(-50%);
 }
 
@@ -275,9 +276,7 @@ main {
     opacity: 0;
     pointer-events: none;
     transform: translate(-50%, -50%) scale(0.96);
-    transition:
-        transform 0.45s cubic-bezier(0.22, 1, 0.36, 1),
-        opacity 0.45s ease;
+    transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .carousel-slide.is-current {
@@ -308,16 +307,15 @@ main {
 }
 
 .preview-frame {
+
     display: block;
     position: relative;
     width: 100%;
     height: 100%;
     overflow: hidden;
     background: #000;
-    box-shadow: 2px 2px 0px rgb(0 0 0 / 25%);
     color: inherit;
     text-decoration: none;
-    transition: opacity 0.45s ease;
 }
 
 .preview-frame:focus-visible,
@@ -343,7 +341,7 @@ main {
 
 .carousel-controls {
     position: absolute;
-    top: calc(50% + var(--card-half-height) + var(--control-gap));
+    top: calc(50% + var(--card-half-height) + var(--control-gap) - var(--carousel-group-shift));
     left: 50%;
     display: flex;
     align-items: center;
@@ -376,10 +374,6 @@ main {
     background: transparent;
 }
 
-.carousel.is-dragging {
-    cursor: grabbing;
-}
-
 .member-name-label {
     margin: 0;
     font-family: "PixelHackers", monospace;
@@ -390,12 +384,13 @@ main {
 }
 
 .list-view {
+    border: 1px solid #ededed;
     position: relative;
-    width: min(760px, calc(100vw - 48px));
+    width: min(887px, 51.33vw, 79.4svh, calc(100vw - 40px));
     margin: clamp(150px, 22vh, 240px) auto 80px;
     padding: 28px;
-    border: 1px solid rgb(0 0 0 / 10%);
     border-radius: 0;
+
     background: var(--paper);
 }
 
@@ -425,6 +420,7 @@ main {
 }
 
 .member-list {
+
     display: flex;
     flex-direction: column;
 }
@@ -437,14 +433,14 @@ main {
     min-height: 46px;
     margin-inline: -12px;
     padding: 12px;
-    border-top: 1px dashed rgb(0 0 0 / 18%);
+    border-top: 1px solid rgb(0 0 0 / 10%);
     color: var(--ink);
     text-decoration: none;
     transition: background-color 150ms ease;
 }
 
 .member-list-row:hover {
-    background: rgb(0 0 0 / 3%);
+    background: var(--accent-trans);
 }
 
 .member-list-row:focus-visible {
@@ -472,7 +468,7 @@ main {
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
-    transform: translate(-50%, -50%) scale(0.98);
+    transform: none;
     transition:
         opacity 150ms ease,
         transform 150ms ease,
@@ -483,7 +479,7 @@ main {
 .member-list-row:focus-within .member-list-preview {
     opacity: 1;
     visibility: visible;
-    transform: translate(-50%, -50%) scale(1);
+    transform: none;
 }
 
 .member-list-preview img {
@@ -520,7 +516,6 @@ main {
 @media (max-width: 1200px) {
     .carousel-slide.is-prev,
     .carousel-slide.is-next {
-        opacity: 0;
         pointer-events: none;
     }
 }
@@ -584,20 +579,6 @@ main {
         align-items: flex-start;
         flex-direction: column;
         gap: 2px;
-    }
-
-    .member-list-preview {
-        box-shadow: none;
-        position: relative;
-        top: auto;
-        left: auto;
-        width: 100%;
-        margin-top: 12px;
-        opacity: 1;
-        visibility: visible;
-        pointer-events: none;
-        transform: none;
-        transition: none;
     }
 
     .member-list-site {
@@ -681,7 +662,4 @@ main {
         transition: none;
     }
 
-    .life-background {
-        display: none;
-    }
 }
