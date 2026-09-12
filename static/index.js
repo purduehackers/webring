@@ -130,12 +130,14 @@ function initCarousel() {
     if (!slides.length) {
         return;
     }
+    const random = slides.sort(() => Math.random() - 0.5)[0];
 
     const nameLabel = document.getElementById("current-name");
     const prevBtn = document.getElementById("prev-btn");
     const nextBtn = document.getElementById("next-btn");
     const carousel = document.querySelector(".carousel");
-    let current = 0;
+    const index = slides.indexOf(random);
+    let current = index;
 
     function memberName(slide) {
         return slide.querySelector(".preview-frame")?.dataset.umamiEventName || "";
@@ -199,10 +201,15 @@ function initCarousel() {
 
     render();
 }
+function shuffleCarousel()
+{
+
+}
 
 document.addEventListener("DOMContentLoaded", () => {
     initOutboundLinkTracking();
     initListPreviewCursor();
     initViewToggle();
-    initCarousel();
+  initCarousel();
+  shuffleCarousel();
 });
