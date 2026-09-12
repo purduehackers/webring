@@ -33,19 +33,43 @@ function initListPreviewCursor() {
             return;
         }
 
+        document.body.appendChild(preview);
+
         function movePreview(event) {
             if (event.pointerType && event.pointerType !== "mouse") {
                 return;
             }
             preview.style.position = "fixed";
             preview.style.transform = "none";
-            preview.style.left = `${event.clientX - preview.offsetWidth - 12}px`;
-            preview.style.top = `${event.clientY - preview.offsetHeight - 12}px`;
+
+            const gap = 12;
+            const width = preview.offsetWidth;
+            const height = preview.offsetHeight;
+            let left = event.clientX + gap;
+            let top = event.clientY + gap;
+
+            if (left + width > window.innerWidth - gap) {
+                left = event.clientX - width - gap;
+            }
+            if (top + height > window.innerHeight - gap) {
+                top = event.clientY - height - gap;
+            }
+
+            preview.style.left = `${Math.max(gap, left)}px`;
+            preview.style.top = `${Math.max(gap, top)}px`;
+            preview.classList.add("is-visible");
+        }
+
+        function hidePreview(event) {
+            if (event.pointerType && event.pointerType !== "mouse") {
+                return;
+            }
+            preview.classList.remove("is-visible");
         }
 
         row.addEventListener("pointerenter", movePreview);
         row.addEventListener("pointermove", movePreview);
-        row.addEventListener("mousemove", movePreview);
+        row.addEventListener("pointerleave", hidePreview);
     });
 }
 

@@ -475,8 +475,7 @@ main {
         visibility 150ms ease;
 }
 
-.member-list-row:hover .member-list-preview,
-.member-list-row:focus-within .member-list-preview {
+.member-list-preview.is-visible {
     opacity: 1;
     visibility: visible;
     transform: none;
