@@ -134,7 +134,7 @@ function initCarousel() {
     const prevBtn = document.getElementById("prev-btn");
     const nextBtn = document.getElementById("next-btn");
     const carousel = document.querySelector(".carousel");
-    const randomScream = new Audio("/static/random-scream.mp3");
+    const randomScream = new Audio("/static/scream.mp3");
     let current = Math.floor(Math.random() * slides.length);
 
     function memberName(slide) {
@@ -180,7 +180,7 @@ function initCarousel() {
     let clickCount = 0;
     prevBtn?.addEventListener("click", () => {
         clickCount++;
-        if (clickCount % 500 === 0) {
+        if (clickCount % 100 === 0) {
             randomScream.currentTime = 0;
             randomScream.play().catch(() => {});
         } else {
@@ -189,7 +189,13 @@ function initCarousel() {
         showPrevious();
     });
     nextBtn?.addEventListener("click", () => {
-        playClick();
+        clickCount++;
+        if (clickCount % 100 === 0) {
+            randomScream.currentTime = 0;
+            randomScream.play().catch(() => {});
+        } else {
+            playClick();
+        }
         showNext();
     });
 
