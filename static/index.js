@@ -35,29 +35,39 @@ function initListPreviewCursor() {
 
         document.body.appendChild(preview);
 
-        function movePreview(event) {
-            if (event.pointerType && event.pointerType !== "mouse") {
-                return;
-            }
+        function positionPreview(clientX, clientY) {
             preview.style.position = "fixed";
             preview.style.transform = "none";
 
             const gap = 12;
             const width = preview.offsetWidth;
             const height = preview.offsetHeight;
-            let left = event.clientX + gap;
-            let top = event.clientY + gap;
+            let left = clientX + gap;
+            let top = clientY + gap;
 
             if (left + width > window.innerWidth - gap) {
-                left = event.clientX - width - gap;
+                left = clientX - width - gap;
             }
             if (top + height > window.innerHeight - gap) {
-                top = event.clientY - height - gap;
+                top = clientY - height - gap;
             }
 
             preview.style.left = `${Math.max(gap, left)}px`;
             preview.style.top = `${Math.max(gap, top)}px`;
             preview.classList.add("is-visible");
+        }
+
+        function movePreview(event) {
+            if (event.pointerType && event.pointerType !== "mouse") {
+                return;
+            }
+            positionPreview(event.clientX, event.clientY);
+        }
+
+        function showFocusedPreview() {
+            const bounds = row.getBoundingClientRect();
+            // Anchor preview to row top right
+            positionPreview(bounds.right, bounds.top);
         }
 
         function hidePreview(event) {
@@ -70,6 +80,12 @@ function initListPreviewCursor() {
         row.addEventListener("pointerenter", movePreview);
         row.addEventListener("pointermove", movePreview);
         row.addEventListener("pointerleave", hidePreview);
+        row.addEventListener("focusin", showFocusedPreview);
+        row.addEventListener("focusout", event => {
+            if (!row.contains(event.relatedTarget)) {
+                preview.classList.remove("is-visible");
+            }
+        });
     });
 }
 
