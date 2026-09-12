@@ -178,7 +178,7 @@ function initCarousel() {
     }
 
     let clickCount = 0;
-    prevBtn?.addEventListener("click", () => {
+    function navigate(direction) {
         clickCount++;
         if (clickCount % 100 === 0) {
             randomScream.currentTime = 0;
@@ -186,17 +186,27 @@ function initCarousel() {
         } else {
             playClick();
         }
-        showPrevious();
-    });
-    nextBtn?.addEventListener("click", () => {
-        clickCount++;
-        if (clickCount % 100 === 0) {
-            randomScream.currentTime = 0;
-            randomScream.play().catch(() => {});
+
+        if (direction === "previous") {
+            showPrevious();
         } else {
-            playClick();
+            showNext();
         }
-        showNext();
+    }
+
+    prevBtn?.addEventListener("click", () => navigate("previous"));
+    nextBtn?.addEventListener("click", () => navigate("next"));
+
+    slides.forEach(slide => {
+        slide.addEventListener("click", event => {
+            if (slide.classList.contains("is-prev")) {
+                event.preventDefault();
+                navigate("previous");
+            } else if (slide.classList.contains("is-next")) {
+                event.preventDefault();
+                navigate("next");
+            }
+        });
     });
 
     document.addEventListener("keydown", event => {
