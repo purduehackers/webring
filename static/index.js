@@ -1,5 +1,5 @@
 /*
-Copyright (C) 2025 Kian Kasad and Amber Zeng
+Copyright (C) 2025 members of Purdue Hackers
 
 This file is part of the Purdue Hackers webring.
 

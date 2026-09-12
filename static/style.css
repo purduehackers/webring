@@ -278,6 +278,7 @@ main {
     pointer-events: none;
     transform: translate(-50%, -50%) scale(0.96);
     transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+    user-select: none;
 }
 
 .carousel-slide.is-current {
@@ -292,6 +293,7 @@ main {
     z-index: 2;
     opacity: 1;
     pointer-events: auto;
+    cursor: pointer;
     transform: translate(-50%, -50%);
 }
 
@@ -306,6 +308,11 @@ main {
 .carousel-slide.is-prev .preview-frame,
 .carousel-slide.is-next .preview-frame {
     opacity: 0.62;
+}
+
+/* When clicking the next/previous site, don't navigate to the site. */
+.carousel-slide:is(.is-prev, .is-next) a {
+	pointer-events: none;
 }
 
 .preview-frame {
