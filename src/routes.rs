@@ -27,6 +27,7 @@ use std::{
     path::Path,
     str::FromStr,
     sync::{Arc, LazyLock},
+    time::{Duration, SystemTime},
 };
 
 use axum::{
@@ -40,7 +41,6 @@ use axum::{
 };
 use chrono::Utc;
 use sentry::integrations::tower::{NewSentryLayer, SentryHttpLayer};
-use serde::{Deserialize, Serialize};
 use tera::Tera;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -52,16 +52,25 @@ use tower_http::{
 };
 use tracing::warn;
 
-use crate::webring::{TraverseWebringError, Webring};
+use crate::{
+    site_previews::SitePreviewCache,
+    webring::{TraverseWebringError, Webring},
+};
 
 /// Static HTML template for rendering error responses.
 static ERROR_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_error_template);
 
-/// Static HTML template for rendering the /flip page.
-static FLIP_TEMPLATE: LazyLock<Tera> = LazyLock::new(create_flip_template);
+/// [`AppState`] holds state for a webring API router.
+#[derive(Debug, Clone)]
+pub struct AppState {
+    /// Webring
+    pub webring: Arc<Webring>,
+    /// Member site preview cache
+    pub preview_cache: Arc<SitePreviewCache>,
+}
 
 /// Creates a [`Router`] with the routes for our application.
-pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
+pub fn create_router(static_dir: &Path) -> Router<AppState> {
     let startup_timestamp_string = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
     Router::new()
         .nest_service(
@@ -91,13 +100,13 @@ pub fn create_router(static_dir: &Path) -> Router<Arc<Webring>> {
             get(async || NoContent).layer(CorsLayer::new().allow_origin(Any)),
         )
         .route("/", get(serve_index))
+        .route("/preview", get(serve_preview))
         .route("/visit", get(serve_visit))
         .route("/next", get(serve_next))
         // Support /prev and /previous as aliases of each other
         .route("/prev", get(serve_previous))
         .route("/previous", get(serve_previous))
         .route("/random", get(serve_random))
-        .route("/flip", get(serve_flip))
         // We use the error demo route in the README, so keep it in release mode
         .route(
             "/debug/panic",
@@ -149,7 +158,7 @@ fn redirect_with_content(to: &Uri) -> impl IntoResponse + use<> {
 
 /// Serve the homepage at `/`
 async fn serve_index(
-    State(webring): State<Arc<Webring>>,
+    State(AppState { webring, .. }): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -159,6 +168,44 @@ async fn serve_index(
     Ok(Html(webring.homepage().await?.to_html().to_owned()).into_response())
 }
 
+/// Serve a cached member website screenshot.
+async fn serve_preview(
+    State(AppState {
+        webring,
+        preview_cache,
+    }): State<AppState>,
+    Query(mut params): Query<HashMap<String, String>>,
+) -> Result<Response, RouteError> {
+    let authority = match params.remove("member") {
+        Some(str) => match str.parse::<Uri>() {
+            Ok(authority) => authority,
+            Err(e) => {
+                return Err(RouteError::InvalidRedirectURI {
+                    uri: str,
+                    reason: e,
+                });
+            }
+        },
+        None => return Err(RouteError::MissingRedirectURI),
+    };
+    let (id, uri) = webring.get_preview_info(&authority)?;
+    let preview = preview_cache.get_preview(&id, uri).await;
+    let now = SystemTime::now();
+    let cache_duration = preview
+        .expires_at
+        .duration_since(now)
+        .unwrap_or(Duration::ZERO);
+    Ok(Response::builder()
+        .status(200)
+        .header("Content-Type", "image/webp")
+        .header(
+            "Cache-Control",
+            format!("public, max-age={}", cache_duration.as_secs()),
+        )
+        .body(Body::from(preview.image.0))
+        .unwrap())
+}
+
 /// Serve the `/visit` endpoint
 ///
 /// For each request, this function:
@@ -166,7 +213,7 @@ async fn serve_index(
 /// 2. Simultaneously queries the webring for the member's URL and logs the request in the statistics
 /// 3. Redirects the user to the member's page
 async fn serve_visit(
-    State(webring): State<Arc<Webring>>,
+    State(AppState { webring, .. }): State<AppState>,
     Query(mut params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, RouteError> {
@@ -197,7 +244,7 @@ async fn serve_visit(
 ///
 /// If finding the next site fails, an HTTP 502 (Service Unavailable) response is sent.
 async fn serve_next(
-    State(webring): State<Arc<Webring>>,
+    State(AppState { webring, .. }): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -223,7 +270,7 @@ async fn serve_next(
 ///
 /// If finding the previous site fails, an HTTP 502 (Service Unavailable) response is sent.
 async fn serve_previous(
-    State(webring): State<Arc<Webring>>,
+    State(AppState { webring, .. }): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -249,7 +296,7 @@ async fn serve_previous(
 ///
 /// If finding a random site fails, an HTTP 502 (Service Unavailable) response is sent.
 async fn serve_random(
-    State(webring): State<Arc<Webring>>,
+    State(AppState { webring, .. }): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -264,36 +311,6 @@ async fn serve_random(
         )],
         redirect_with_content(&page),
     ))
-}
-
-/// Query parameters for the `/flip` endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FlipParams {
-    /// The URL to embed flipped.
-    url: String,
-    /// Whether to flip horizontally (over y-axis)
-    #[serde(default)]
-    horizontal: bool,
-    /// Whether to flip vertically (over x-axis)
-    #[serde(default)]
-    vertical: bool,
-}
-
-/// Serve the `/flip` endpoint.
-async fn serve_flip(Query(params): Query<FlipParams>) -> Html<String> {
-    let ctx = tera::Context::from_serialize(&params).unwrap();
-    Html(FLIP_TEMPLATE.render("flip.html", &ctx).unwrap())
-}
-
-/// Creates a Tera template for rendering the /flip page's HTML.
-///
-/// The template is baked into the binary at compile time using `include_str!`, so it is guaranteed
-/// to be correct and renderable.
-fn create_flip_template() -> Tera {
-    let html_src = include_str!("templates/flip.html");
-    let mut tera = Tera::default();
-    tera.add_raw_template("flip.html", html_src).unwrap();
-    tera
 }
 
 /// Get a URI representing the origin of the request.
@@ -522,7 +539,12 @@ impl ResponseForPanic for PanicResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, str::FromStr as _, sync::Arc};
+    use std::{
+        net::SocketAddr,
+        str::FromStr as _,
+        sync::Arc,
+        time::{Duration, SystemTime},
+    };
 
     use axum::{
         Router,
@@ -543,6 +565,8 @@ mod tests {
     use tower_http::catch_panic::ResponseForPanic;
 
     use crate::{
+        routes::AppState,
+        site_previews::{SitePreviewCache, TestScreenshotter},
         stats::{TIMEZONE, UNKNOWN_ORIGIN},
         webring::Webring,
     };
@@ -581,20 +605,32 @@ mod tests {
             .await
             .unwrap();
 
+        let cache_dir = static_dir.path().join("cache");
         let config = toml::from_str(&format!(
             indoc! { r#"
             [webring]
             base-url = "https://ring.purduehackers.com"
             static-dir = "{}"
+            cache-dir = "{}"
             [network]
             listen-addr = "0.0.0.0:3000"
             [members]
-            henry = {{ url = "hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }}
-            kian = {{ url = "kasad.com", discord-id = 456, check-level = "none" }}
+            henry = {{ url = "https://hrovnyak.gitlab.io", discord-id = 123, check-level = "none" }}
+            kian = {{ url = "https://kasad.com", discord-id = 456, check-level = "none" }}
             ericswpark = {{ url = "https://ericswpark.com", discord-id = 789, check-level = "none" }}
-        "# }, static_dir.path().to_string_lossy().escape_default())).unwrap();
+        "# },
+            static_dir.path().to_string_lossy().escape_default(),
+            cache_dir.to_string_lossy().escape_default(),
+        ))
+        .unwrap();
         let webring = Arc::new(Webring::new(&config));
-        let router: Router = create_router(static_dir.path()).with_state(Arc::clone(&webring));
+        let screenshotter = Box::new(TestScreenshotter::new());
+        let preview_cache = Arc::new(SitePreviewCache::new(&config, screenshotter).await.unwrap());
+        let state = AppState {
+            webring: Arc::clone(&webring),
+            preview_cache: Arc::clone(&preview_cache),
+        };
+        let router: Router = create_router(static_dir.path()).with_state(state);
         (router, webring, static_dir)
     }
 
@@ -665,6 +701,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preview() {
+        let (router, _webring, tmpfiles) = app().await;
+        let cache_path = tmpfiles.path().join("cache/kian.webp");
+        fs::write(&cache_path, b"cached webp").await.unwrap();
+        let expires_at =
+            fs::metadata(&cache_path).await.unwrap().modified().unwrap() + Duration::from_hours(6);
+
+        let before_request = SystemTime::now();
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/preview?member=kasad.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let after_request = SystemTime::now();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(header::CONTENT_TYPE).unwrap(),
+            "image/webp"
+        );
+        let cache_control = res
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let max_age: u64 = cache_control
+            .strip_prefix("public, max-age=")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let min_max_age = expires_at.duration_since(after_request).unwrap().as_secs();
+        let max_max_age = expires_at.duration_since(before_request).unwrap().as_secs();
+        assert!((min_max_age..=max_max_age).contains(&max_age));
+        assert_eq!(
+            res.into_body().collect().await.unwrap().to_bytes().as_ref(),
+            b"cached webp"
+        );
+    }
+
+    #[tokio::test]
+    async fn preview_unknown_member() {
+        let (router, _, _tmpfiles) = app().await;
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/preview?member=unknown.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn visit() {
         let (router, webring, tmpfiles) = app().await;
 
@@ -680,7 +775,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(res.headers().get("location").unwrap(), "kasad.com");
+        assert_eq!(res.headers().get("location").unwrap(), "https://kasad.com/");
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         webring.assert_stat_entry(
             (
@@ -752,7 +847,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(res.headers().get("location").unwrap(), "kasad.com");
+        assert_eq!(res.headers().get("location").unwrap(), "https://kasad.com/");
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
         drop(tmpfiles);
@@ -773,7 +868,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(res.headers().get("location").unwrap(), "hrovnyak.gitlab.io");
+        assert_eq!(
+            res.headers().get("location").unwrap(),
+            "https://hrovnyak.gitlab.io/"
+        );
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
         drop(tmpfiles);
@@ -807,29 +905,5 @@ mod tests {
             );
             assert_ne!(res.headers().get(header::CONTENT_LENGTH).unwrap(), "0");
         }
-    }
-
-    #[tokio::test]
-    async fn flip() {
-        let (router, _webring, _tmpfiles) = app().await;
-
-        let res = router
-            .oneshot(
-                Request::builder()
-                    .uri("/flip?url=https://arhan.sh")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(
-            res.headers().get("content-type").unwrap(),
-            "text/html; charset=utf-8"
-        );
-        let text = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec())
-            .unwrap();
-        assert!(text.contains("src=\"https:&#x2F;&#x2F;arhan.sh\""));
     }
 }

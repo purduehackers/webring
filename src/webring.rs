@@ -50,6 +50,7 @@ use crate::{
     config::{Config, MemberSpec},
     discord::{DiscordNotifier, NOTIFICATION_DEBOUNCE_PERIOD, Snowflake},
     homepage::{Homepage, MemberForHomepage},
+    site_previews::SitePreviewId,
     stats::{Stats, UNKNOWN_ORIGIN},
 };
 
@@ -235,7 +236,7 @@ impl Webring {
             homepage: AsyncRwLock::new(None),
             stats: Arc::new(Stats::new()),
             file_watcher: OnceLock::default(),
-            base_address: config.webring.base_url(),
+            base_address: config.webring.base_url,
             notifier: config
                 .discord
                 .as_ref()
@@ -243,7 +244,7 @@ impl Webring {
                 .map(DiscordNotifier::new)
                 .map(Arc::new),
             discord_channel_id: config.discord.as_ref().map(|dt| dt.channel_id),
-            base_authority: Intern::from_ref(config.webring.base_url().authority().unwrap()),
+            base_authority: Intern::from_ref(config.webring.base_url.authority().unwrap()),
             config: Arc::new(AsyncRwLock::new(Some(config.clone()))),
         }
     }
@@ -655,6 +656,18 @@ impl Webring {
     /// template.
     pub async fn invalidate_homepage(&self) {
         *self.homepage.write().await = None;
+    }
+
+    /// Given the authority of a member's site, returns the information needed
+    /// to fetch/generate a preview screenshot.
+    pub fn get_preview_info(
+        &self,
+        member_site: &Uri,
+    ) -> Result<(SitePreviewId, Intern<Uri>), TraverseWebringError> {
+        let (idx, _authority, inner) = self.member_idx_and_lock(member_site)?;
+        let website = inner[idx].website;
+        let id = SitePreviewId::from_name(&inner[idx].name);
+        Ok((id, website))
     }
 
     #[cfg(test)]

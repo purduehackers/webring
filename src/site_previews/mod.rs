@@ -1,4 +1,4 @@
-<!--
+/*
 Copyright (C) 2025 Kian Kasad
 
 This file is part of the Purdue Hackers webring.
@@ -15,28 +15,14 @@ for more details.
 
 You should have received a copy of the GNU Affero General Public License along
 with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
--->
+*/
 
-<!DOCTYPE html>
-<html>
-    <head>
-        <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            width: 100%;
-        }
-        iframe {
-            display: block;
-            height: 100%;
-            width: 100%;
-            border: none;
-            scale: {% if horizontal %}-1{% else %}1{% endif %} {% if vertical %}-1{% else %}1{% endif %};
-        }
-        </style>
-    </head>
-    <body>
-        <iframe src="{{ url }}"></iframe>
-    </body>
-</html>
+//! Site preview screenshot handling.
+
+mod cache;
+mod capture;
+
+pub use cache::{SitePreviewCache, SitePreviewId};
+pub use capture::ChromiumScreenshotter;
+#[cfg(test)]
+pub use capture::TestScreenshotter;

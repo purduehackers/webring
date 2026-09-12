@@ -1,0 +1,49 @@
+/*
+Copyright (C) 2025 Kian Kasad
+
+This file is part of the Purdue Hackers webring.
+
+The Purdue Hackers webring is free software: you can redistribute it and/or
+modify it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+The Purdue Hackers webring is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
+for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+//! Screenshot capture implementations
+
+mod chromium;
+mod fallback;
+#[cfg(test)]
+mod test;
+
+#[cfg(test)]
+pub use test::TestScreenshotter;
+
+pub use chromium::ChromiumScreenshotter;
+pub use fallback::FallbackImageGenerator;
+
+use axum::http::Uri;
+use sarlacc::Intern;
+use std::{fmt::Debug, pin::Pin};
+
+/// Typed wrapper for WebP image data.
+#[derive(Debug)]
+pub struct WebpScreenshotData(pub Vec<u8>);
+
+/// Interface implemented by objects which can take screenshots of sites.
+pub trait Screenshotter: Debug + Send + Sync {
+    /// Enqueues a screenshot-taking job for the screenshotter to process at its
+    /// discretion.
+    fn take_screenshot(
+        &self,
+        site: Intern<Uri>,
+    ) -> Pin<Box<dyn Future<Output = eyre::Result<WebpScreenshotData>> + Send + Sync + 'static>>;
+}

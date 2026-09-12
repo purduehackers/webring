@@ -43,12 +43,14 @@ RUN apt-get update \
         ca-certificates \
         curl \
         libssl3 \
-        tini \
+        chromium \
+		tini \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build --chown=0:0 --chmod=0755 /out/ph-webring /usr/bin/webring
 COPY static /usr/share/webring/static
 RUN install -d -m 0755 /etc/webring /var/cache/webring /var/lib/webring
+RUN groupadd -g 1000 webring && useradd -m -u 1000 -g 1000 -d /home/webring webring
 
 WORKDIR /var/lib/webring
 
@@ -57,5 +59,6 @@ EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD ["curl", "--fail", "--silent", "--show-error", "--max-time", "2", "--output", "/dev/null", "http://[::1]/"]
 
+USER 1000:1000
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/bin/webring"]
 CMD ["-f", "/etc/webring/webring.toml"]

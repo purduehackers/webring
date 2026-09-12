@@ -38,11 +38,17 @@ use tracing::{debug, debug_span, error, info, instrument, warn};
 use tracing_subscriber::prelude::*;
 use webring::Webring;
 
+use crate::{
+    routes::AppState,
+    site_previews::{ChromiumScreenshotter, SitePreviewCache},
+};
+
 mod checking;
 mod config;
 mod discord;
 mod homepage;
 mod routes;
+mod site_previews;
 mod stats;
 mod webring;
 
@@ -173,9 +179,29 @@ async fn async_main(cli: CliOptions, cfg: Arc<Config>) -> ExitCode {
         }
     });
 
+    // Create screenshotter and preview cache
+    let screenshotter = match ChromiumScreenshotter::new(&cfg.screenshots).await {
+        Ok(screenshotter) => Box::new(screenshotter),
+        Err(err) => {
+            error!(%err, "failed to create Chromium screenshotter");
+            return ExitCode::FAILURE;
+        }
+    };
+    let preview_cache = match SitePreviewCache::new(&cfg, screenshotter).await {
+        Ok(v) => v,
+        Err(err) => {
+            error!(%err, "failed to create site preview cache");
+            return ExitCode::FAILURE;
+        }
+    };
+
     // Start server
+    let state = AppState {
+        webring: Arc::clone(&webring),
+        preview_cache: Arc::new(preview_cache),
+    };
     let router = create_router(&cfg.webring.static_dir)
-        .with_state(Arc::clone(&webring))
+        .with_state(state)
         .into_make_service_with_connect_info::<SocketAddr>();
     let bind_addr = &cfg.network.listen_addr;
     match tokio::net::TcpListener::bind(bind_addr).await {

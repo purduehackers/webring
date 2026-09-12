@@ -3,3 +3,5 @@
 result
 node_modules
 webring.log
+webring.local.toml
+cache

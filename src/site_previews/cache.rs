@@ -1,0 +1,383 @@
+/*
+Copyright (C) 2025 Kian Kasad
+
+This file is part of the Purdue Hackers webring.
+
+The Purdue Hackers webring is free software: you can redistribute it and/or
+modify it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+The Purdue Hackers webring is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
+for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+//! Site screenshot cache
+
+use std::{
+    io::ErrorKind,
+    ops::Deref,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
+
+use axum::http::Uri;
+use eyre::WrapErr;
+use papaya::HashSet;
+use sarlacc::Intern;
+use tokio::io::AsyncReadExt;
+use tracing::{debug, error, info, warn};
+
+use crate::{
+    config::Config,
+    site_previews::capture::{FallbackImageGenerator, Screenshotter, WebpScreenshotData},
+};
+
+/// A filename-safe ID to represent a site preview.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SitePreviewId(String);
+
+impl Deref for SitePreviewId {
+    type Target = String;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl SitePreviewId {
+    /// Creates a site preview ID from a webring member's name.
+    pub fn from_name(name: &str) -> SitePreviewId {
+        SitePreviewId(
+            name.chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
+                .collect(),
+        )
+    }
+}
+
+/// Site preview response.
+#[derive(Debug)]
+pub struct SitePreview {
+    /// The screenshot image data.
+    pub image: WebpScreenshotData,
+    /// The time at which the cached preview expires. May be in the past.
+    pub expires_at: SystemTime,
+}
+
+/// A cache for site previews.
+///
+/// This cache stores the preview screenshots in the filesystem. It uses its
+/// [`screenshotter`] to generate new screenshots when cached ones expire.
+#[derive(Debug)]
+pub struct SitePreviewCache {
+    /// Directory in which cached screenshots are stored
+    cache_dir: PathBuf,
+    /// Screenshotter used to take screenshots of sites
+    screenshotter: Box<dyn Screenshotter>,
+    /// Generator used when no captured or cached screenshot is available
+    fallback_generator: FallbackImageGenerator,
+    /// Set which tracks which sites are currently being revalidated. Used to
+    /// deduplicate requests for revalidation.
+    revalidating: Arc<HashSet<SitePreviewId>>,
+    /// The amount of time cached screenshots are considered fresh for. After
+    /// this time, they will be revalidated.
+    revalidation_period: Duration,
+}
+
+impl SitePreviewCache {
+    /// Creates a preview cache.
+    ///
+    /// The cache directory and revalidation period are sourced from `config`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if creating the cache directory fails.
+    pub async fn new(
+        config: &Config,
+        screenshotter: Box<dyn Screenshotter>,
+    ) -> eyre::Result<SitePreviewCache> {
+        tokio::fs::create_dir_all(&config.webring.cache_dir)
+            .await
+            .wrap_err("failed to create screenshot cache directory")?;
+        Ok(SitePreviewCache {
+            cache_dir: config.webring.cache_dir.clone(),
+            revalidation_period: config.screenshots.cache_duration,
+            screenshotter,
+            fallback_generator: FallbackImageGenerator::new(
+                config.screenshots.width,
+                config.screenshots.height,
+            ),
+            revalidating: Arc::new(HashSet::new()),
+        })
+    }
+
+    /// Fetches the preview screenshot for the given site from the cache. If the
+    /// screenshot is stale, it is returned and a revalidation is requested in
+    /// the background.
+    ///
+    /// This function always succeeds. If there is an error loading the
+    /// screenshot from the cache, an error is logged and the placeholder image
+    /// is returned.
+    pub async fn get_preview(&self, id: &SitePreviewId, uri: Intern<Uri>) -> SitePreview {
+        let path = self.target_path(id);
+        let file = match tokio::fs::File::open(&path).await {
+            Ok(file) => Some(file),
+            Err(err) if err.kind() == ErrorKind::NotFound => None,
+            Err(err) => {
+                error!(%err, ?path, "failed to open cached screenshot file");
+                None
+            }
+        };
+        let maybe_preview = match file {
+            None => {
+                warn!(id = %**id, "no screenshot for site; returning placeholder");
+                None
+            }
+            Some(mut file) => {
+                let result: eyre::Result<SitePreview> = async {
+                    let metadata = file
+                        .metadata()
+                        .await
+                        .wrap_err("failed to stat screenshot file")?;
+                    let mtime = metadata.modified().wrap_err("file mtime isn't available")?;
+                    let expires_at = mtime + self.revalidation_period;
+                    let mut buf = Vec::new();
+                    file.read_to_end(&mut buf)
+                        .await
+                        .wrap_err("failed to read cached screenshot file")?;
+                    debug!(id = %**id, "cached screenshot hit");
+                    Ok(SitePreview {
+                        image: WebpScreenshotData(buf),
+                        expires_at,
+                    })
+                }
+                .await;
+                match result {
+                    Ok(preview) => Some(preview),
+                    Err(err) => {
+                        error!(%err, ?path, "error loading screenshot from cached file");
+                        None
+                    }
+                }
+            }
+        };
+        if maybe_preview
+            .as_ref()
+            .is_none_or(|preview| preview.expires_at <= SystemTime::now())
+        {
+            self.revalidate(id, uri);
+        }
+        match maybe_preview {
+            Some(preview) => preview,
+            None => {
+                let image = self
+                    .fallback_generator
+                    .take_screenshot(uri)
+                    .await
+                    .expect("fallback screenshotter failed");
+                SitePreview {
+                    image,
+                    expires_at: SystemTime::UNIX_EPOCH,
+                }
+            }
+        }
+    }
+
+    /// Gets the image path for a given [`SitePreviewId`].
+    fn target_path(&self, id: &SitePreviewId) -> PathBuf {
+        self.cache_dir.join(format!("{}.webp", id.0))
+    }
+
+    /// Requests revalidation of the given site preview in the background.
+    /// The request is submitted to the [`Screenshotter`] and a background task
+    /// is spawned to wait for the result and save it in the cache directory.
+    fn revalidate(&self, id: &SitePreviewId, uri: Intern<Uri>) {
+        if !self.revalidating.pin().insert(id.clone()) {
+            return;
+        }
+        info!(id = %**id, ?uri, "requesting screenshot of site");
+        let screenshot_result = self.screenshotter.take_screenshot(uri);
+        let target_path = self.target_path(id);
+        let revalidating = Arc::clone(&self.revalidating);
+        let id = id.clone();
+        tokio::task::spawn(async move {
+            // The code in this block must not return early because removing
+            // the revalidating marker happens afterwards.
+            match screenshot_result.await {
+                Ok(image) => {
+                    if let Err(err) = tokio::fs::write(&target_path, &image.0).await {
+                        error!(err = %format_args!("{err:#}"), ?target_path, "failed to save screenshot image");
+                    }
+                }
+                Err(err) => {
+                    error!(err = %format_args!("{err:#}"), %uri, "failed to take screenshot");
+                }
+            }
+            revalidating.pin().remove(&id);
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        path::Path,
+        sync::LazyLock,
+        time::{Duration, SystemTime},
+    };
+
+    use axum::http::Uri;
+    use pretty_assertions::assert_eq;
+    use sarlacc::Intern;
+    use tempfile::TempDir;
+    use tokio::{fs, time::timeout};
+
+    use crate::{
+        config::{Config, ScreenshotsTable, WebringTable},
+        site_previews::{
+            SitePreviewCache, SitePreviewId, TestScreenshotter,
+            capture::{FallbackImageGenerator, Screenshotter},
+        },
+    };
+
+    static URI: LazyLock<Intern<Uri>> =
+        LazyLock::new(|| Intern::new(Uri::from_static("https://example.com")));
+
+    fn test_config(cache_dir: &Path, static_dir: &Path, cache_duration: Duration) -> Config {
+        Config {
+            webring: WebringTable {
+                cache_dir: cache_dir.to_owned(),
+                static_dir: static_dir.to_owned(),
+                ..Default::default()
+            },
+            screenshots: ScreenshotsTable {
+                cache_duration,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    async fn make_cache(
+        revalidation_period: Duration,
+    ) -> (TempDir, SitePreviewCache, SitePreviewId, TestScreenshotter) {
+        let temp_dir = TempDir::new().unwrap();
+        let static_dir = temp_dir.path().join("static");
+        fs::create_dir(&static_dir).await.unwrap();
+        let config = test_config(
+            &temp_dir.path().join("cache"),
+            &static_dir,
+            revalidation_period,
+        );
+        let screenshotter = TestScreenshotter::new();
+        let cache = SitePreviewCache::new(&config, Box::new(screenshotter.clone()))
+            .await
+            .unwrap();
+        let id = SitePreviewId::from_name("test member");
+        (temp_dir, cache, id, screenshotter)
+    }
+
+    async fn wait_for_cached_image(path: &Path, expected: &[u8]) {
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if fs::read(path)
+                    .await
+                    .is_ok_and(|contents| contents == expected)
+                {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("timed out waiting for cached screenshot");
+    }
+
+    #[test]
+    fn preview_ids_are_filename_safe() {
+        assert_eq!(
+            "letters-AND_0123------",
+            SitePreviewId::from_name("letters-AND_0123 /..!?").to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn creates_cache_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_dir = temp_dir.path().join("nested/cache");
+        let config = test_config(&cache_dir, temp_dir.path(), Duration::from_mins(1));
+        assert!(!cache_dir.exists());
+        SitePreviewCache::new(&config, Box::new(TestScreenshotter::new()))
+            .await
+            .unwrap();
+        assert!(cache_dir.is_dir());
+    }
+
+    #[tokio::test]
+    async fn returns_fresh_cached_preview() {
+        let (_temp_dir, cache, id, screenshotter) = make_cache(Duration::from_hours(1)).await;
+        let path = cache.target_path(&id);
+        fs::write(&path, b"cached screenshot").await.unwrap();
+        let preview = cache.get_preview(&id, *URI).await;
+        assert_eq!(b"cached screenshot", preview.image.0.as_slice());
+        assert!(preview.expires_at > std::time::SystemTime::now());
+        assert_eq!(0, screenshotter.screenshots_taken());
+    }
+
+    #[tokio::test]
+    async fn returns_placeholder_when_preview_is_not_cached() {
+        let (_temp_dir, cache, id, screenshotter) = make_cache(Duration::from_hours(1)).await;
+
+        let first_preview = cache.get_preview(&id, *URI).await;
+        let settings = ScreenshotsTable::default();
+        let expected_image = FallbackImageGenerator::new(settings.width, settings.height)
+            .take_screenshot(*URI)
+            .await
+            .unwrap();
+
+        // Should return placeholder with no cache duration
+        assert_eq!(
+            expected_image.0, first_preview.image.0,
+            "first preview image doesn't match expected"
+        );
+        assert!(first_preview.expires_at <= SystemTime::now());
+
+        // Should trigger a screenshot to be taken asynchronously
+        assert_eq!(1, screenshotter.screenshots_taken());
+        wait_for_cached_image(&cache.target_path(&id), b"webp screenshot 0").await;
+    }
+
+    #[tokio::test]
+    async fn returns_stale_preview_while_revalidating_it() {
+        let (_temp_dir, cache, id, screenshotter) = make_cache(Duration::ZERO).await;
+        let path = cache.target_path(&id);
+        fs::write(&path, b"stale screenshot").await.unwrap();
+        let preview = cache.get_preview(&id, *URI).await;
+        assert_eq!(b"stale screenshot", preview.image.0.as_slice());
+        wait_for_cached_image(&path, b"webp screenshot 0").await;
+        assert_eq!(1, screenshotter.screenshots_taken());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn deduplicates_concurrent_revalidations() {
+        let (_temp_dir, cache, id, screenshotter) = make_cache(Duration::ZERO).await;
+        // Since we're using the single-threaded runtime, these two calls will
+        // complete before the result gets processed by the background task.
+        cache.revalidate(&id, *URI);
+        cache.revalidate(&id, *URI);
+        assert_eq!(1, screenshotter.screenshots_taken());
+        wait_for_cached_image(&cache.target_path(&id), b"webp screenshot 0").await;
+    }
+}

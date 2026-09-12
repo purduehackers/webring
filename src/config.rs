@@ -22,6 +22,7 @@ with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 use std::{
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use axum::http::Uri;
@@ -51,6 +52,9 @@ pub struct Config {
     pub logging: LoggingTable,
     /// Discord integration configuration
     pub discord: Option<DiscordTable>,
+    /// Site screenshot configuration
+    #[serde(default)]
+    pub screenshots: ScreenshotsTable,
 
     /// Map from member name to their site details
     #[serde(default)]
@@ -65,6 +69,10 @@ pub struct WebringTable {
     #[serde(default = "default_static_dir")]
     pub static_dir: PathBuf,
 
+    /// Directory in which cache files will bve stored
+    #[serde(default = "default_cache_dir")]
+    pub cache_dir: PathBuf,
+
     /// Base URL of the webring, e.g. `https://ring.purduehackers.com`
     ///
     /// It is guaranteed to have a valid host/authority component
@@ -72,7 +80,7 @@ pub struct WebringTable {
         default = "default_address",
         deserialize_with = "deserialize_interned_uri"
     )]
-    base_url: Intern<Uri>,
+    pub base_url: Intern<Uri>,
 }
 
 /// Returns the default static directory
@@ -80,20 +88,79 @@ fn default_static_dir() -> PathBuf {
     PathBuf::from("/usr/share/webring/static")
 }
 
+/// Returns the default cache directory
+fn default_cache_dir() -> PathBuf {
+    PathBuf::from("/var/cache/webring")
+}
+
 impl Default for WebringTable {
     fn default() -> Self {
         Self {
             static_dir: default_static_dir(),
+            cache_dir: default_cache_dir(),
             base_url: default_address(),
         }
     }
 }
 
-impl WebringTable {
-    /// Gets the base URL of the webring
-    pub fn base_url(&self) -> Intern<Uri> {
-        self.base_url
+impl WebringTable {}
+
+/// Site screenshot configuration table
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ScreenshotsTable {
+    /// Width of captured and fallback screenshots, in pixels
+    #[serde(default = "default_screenshot_width")]
+    pub width: u32,
+
+    /// Height of captured and fallback screenshots, in pixels
+    #[serde(default = "default_screenshot_height")]
+    pub height: u32,
+
+    /// Time to wait for a page to settle after loading before capturing it
+    #[serde(
+        default = "default_screenshot_settle_delay",
+        deserialize_with = "duration_str::deserialize_duration"
+    )]
+    pub settle_delay: Duration,
+
+    /// Length of time screenshots may remain cached
+    #[serde(
+        default = "default_screenshot_cache_duration",
+        deserialize_with = "duration_str::deserialize_duration"
+    )]
+    pub cache_duration: Duration,
+}
+
+impl Default for ScreenshotsTable {
+    fn default() -> Self {
+        Self {
+            width: default_screenshot_width(),
+            height: default_screenshot_height(),
+            settle_delay: default_screenshot_settle_delay(),
+            cache_duration: default_screenshot_cache_duration(),
+        }
     }
+}
+
+/// Get the default screenshot width
+const fn default_screenshot_width() -> u32 {
+    1280
+}
+
+/// Get the default screenshot height
+const fn default_screenshot_height() -> u32 {
+    808
+}
+
+/// Get the default settling delay before capturing a screenshot
+const fn default_screenshot_settle_delay() -> Duration {
+    Duration::from_secs(1)
+}
+
+/// Get the default screenshot cache duration
+const fn default_screenshot_cache_duration() -> Duration {
+    Duration::from_hours(6)
 }
 
 /// Network/server configuration table
@@ -280,6 +347,7 @@ impl Config {
             || old.network != new.network
             || old.logging != new.logging
             || old.discord != new.discord
+            || old.screenshots != new.screenshots
     }
 }
 
@@ -288,6 +356,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
+    use std::time::Duration;
 
     use axum::http::Uri;
     use indexmap::IndexMap;
@@ -303,13 +372,14 @@ mod tests {
         webring::{CheckLevel, EnrollmentStatus},
     };
 
-    use super::{Config, DiscordTable, LoggingTable, NetworkTable, WebringTable};
+    use super::{Config, DiscordTable, LoggingTable, NetworkTable, ScreenshotsTable, WebringTable};
 
     #[test]
     fn valid_config() {
         let config = indoc! { r#"
             [webring]
             static-dir = "static"
+            cache-dir = "cache"
             base-url = "https://ring.purduehackers.com"
 
             [network]
@@ -328,6 +398,7 @@ mod tests {
         let expected = Config {
             webring: WebringTable {
                 static_dir: PathBuf::from("static"),
+                cache_dir: PathBuf::from("cache"),
                 base_url: Intern::new(Uri::from_static("https://ring.purduehackers.com/")),
             },
             network: NetworkTable {
@@ -342,6 +413,7 @@ mod tests {
                 webhook_url: Url::parse("https://api.discord.com/webhook-or-something").unwrap(),
                 channel_id: Snowflake::new(1_234_567_890),
             }),
+            screenshots: ScreenshotsTable::default(),
             members: IndexMap::new(),
         };
         assert_eq!(expected, actual);
@@ -359,6 +431,33 @@ mod tests {
         assert_eq!(
             "https://ring.purduehackers.com/",
             &actual.webring.base_url.to_string()
+        );
+    }
+
+    #[test]
+    fn configured_screenshots() {
+        let config = indoc! { r#"
+            [webring]
+            static-dir = "static"
+
+            [screenshots]
+            width = 640
+            height = 404
+            settle-delay = "250ms"
+            cache-duration = "1h15m"
+
+            [network]
+            listen-addr = "0.0.0.0:3000"
+        "# };
+        let actual: Config = toml::from_str(config).unwrap();
+        assert_eq!(
+            ScreenshotsTable {
+                width: 640,
+                height: 404,
+                settle_delay: Duration::from_millis(250),
+                cache_duration: Duration::from_mins(75),
+            },
+            actual.screenshots
         );
     }
 
@@ -424,6 +523,10 @@ mod tests {
             actual.webring.static_dir.as_path(),
             Path::new("/usr/share/webring/static")
         );
+        assert_eq!(
+            actual.webring.cache_dir.as_path(),
+            Path::new("/var/cache/webring")
+        );
     }
 
     #[test]
@@ -440,7 +543,7 @@ mod tests {
         let result = toml::from_str::<Config>(config);
         assert!(result.is_err());
         assert_eq!(
-            "unknown field `extra-field`, expected `static-dir` or `base-url`",
+            "unknown field `extra-field`, expected one of `static-dir`, `cache-dir`, `base-url`",
             result.unwrap_err().message()
         );
     }
