@@ -180,7 +180,7 @@ function initCarousel() {
     let clickCount = 0;
     prevBtn?.addEventListener("click", () => {
         clickCount++;
-        if (clickCount % 5000 === 0) {
+        if (clickCount % 500 === 0) {
             randomScream.currentTime = 0;
             randomScream.play().catch(() => {});
         } else {
