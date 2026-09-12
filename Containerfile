@@ -49,8 +49,8 @@ RUN apt-get update \
 
 COPY --from=build --chown=0:0 --chmod=0755 /out/ph-webring /usr/bin/webring
 COPY static /usr/share/webring/static
-RUN install -d -m 0755 /etc/webring /var/cache/webring /var/lib/webring
 RUN groupadd -g 1000 webring && useradd -m -u 1000 -g 1000 -d /home/webring webring
+RUN install -d -o webring -g webring -m 0755 /etc/webring /var/cache/webring /var/lib/webring
 
 WORKDIR /var/lib/webring
 
