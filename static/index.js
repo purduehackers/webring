@@ -237,6 +237,28 @@ function initCarousel() {
     prevBtn?.addEventListener("click", () => navigate("previous"));
     nextBtn?.addEventListener("click", () => navigate("next"));
 
+    let lastWheelNav = 0;
+    const WHEEL_NAV_DEBOUNCE = 100;
+    carousel?.addEventListener(
+        "wheel",
+        event => {
+            if (!event.deltaY) {
+                return;
+            }
+
+            event.preventDefault();
+
+            const now = performance.now();
+            if (now - lastWheelNav < WHEEL_NAV_DEBOUNCE) {
+                return;
+            }
+            lastWheelNav = now;
+
+            navigate(event.deltaY < 0 ? "previous" : "next");
+        },
+        { passive: false },
+    );
+
     slides.forEach(slide => {
         slide.addEventListener("click", event => {
             if (slide.classList.contains("is-prev")) {
