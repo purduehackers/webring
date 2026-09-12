@@ -440,7 +440,7 @@ main {
 }
 
 .member-list-row:hover {
-    background: var(--accent-trans);
+    background:var(--control);
 }
 
 .member-list-row:focus-visible {
