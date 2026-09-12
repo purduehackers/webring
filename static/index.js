@@ -33,19 +33,59 @@ function initListPreviewCursor() {
             return;
         }
 
+        document.body.appendChild(preview);
+
+        function positionPreview(clientX, clientY) {
+            preview.style.position = "fixed";
+            preview.style.transform = "none";
+
+            const gap = 12;
+            const width = preview.offsetWidth;
+            const height = preview.offsetHeight;
+            let left = clientX + gap;
+            let top = clientY + gap;
+
+            if (left + width > window.innerWidth - gap) {
+                left = clientX - width - gap;
+            }
+            if (top + height > window.innerHeight - gap) {
+                top = clientY - height - gap;
+            }
+
+            preview.style.left = `${Math.max(gap, left)}px`;
+            preview.style.top = `${Math.max(gap, top)}px`;
+            preview.classList.add("is-visible");
+        }
+
         function movePreview(event) {
             if (event.pointerType && event.pointerType !== "mouse") {
                 return;
             }
-            preview.style.position = "fixed";
-            preview.style.transform = "none";
-            preview.style.left = `${event.clientX - preview.offsetWidth - 12}px`;
-            preview.style.top = `${event.clientY - preview.offsetHeight - 12}px`;
+            positionPreview(event.clientX, event.clientY);
+        }
+
+        function showFocusedPreview() {
+            const bounds = row.getBoundingClientRect();
+            // Anchor preview to row top right
+            positionPreview(bounds.right, bounds.top);
+        }
+
+        function hidePreview(event) {
+            if (event.pointerType && event.pointerType !== "mouse") {
+                return;
+            }
+            preview.classList.remove("is-visible");
         }
 
         row.addEventListener("pointerenter", movePreview);
         row.addEventListener("pointermove", movePreview);
-        row.addEventListener("mousemove", movePreview);
+        row.addEventListener("pointerleave", hidePreview);
+        row.addEventListener("focusin", showFocusedPreview);
+        row.addEventListener("focusout", event => {
+            if (!row.contains(event.relatedTarget)) {
+                preview.classList.remove("is-visible");
+            }
+        });
     });
 }
 
