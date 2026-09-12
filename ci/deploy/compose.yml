@@ -26,7 +26,6 @@ services:
       - type: volume
         source: cache
         target: /var/cache/webring
-        read_only: true
     shm_size: 1G
     tmpfs:
       - /tmp
