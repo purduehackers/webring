@@ -44,8 +44,9 @@ RUN apt-get update \
         curl \
         libssl3 \
         chromium \
-		tini \
-    && rm -rf /var/lib/apt/lists/*
+        tini \
+        fonts-noto-color-emoji \
+	&& rm -rf /var/lib/apt/lists/*
 
 COPY --from=build --chown=0:0 --chmod=0755 /out/ph-webring /usr/bin/webring
 COPY static /usr/share/webring/static
