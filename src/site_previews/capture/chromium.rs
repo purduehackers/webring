@@ -40,16 +40,9 @@ use tokio::{
 };
 use tracing::{error, info, instrument};
 
-use crate::site_previews::capture::{Screenshotter, WebpScreenshotData};
-
-/// Viewport for Chromium screenshots
-const VIEWPORT: Viewport = Viewport {
-    width: super::WIDTH as u32,
-    height: super::HEIGHT as u32,
-    is_landscape: super::WIDTH >= super::HEIGHT,
-    device_scale_factor: None,
-    emulating_mobile: false,
-    has_touch: false,
+use crate::{
+    config::ScreenshotsTable,
+    site_previews::capture::{Screenshotter, WebpScreenshotData},
 };
 
 /// Represents a queued screenshot-taking request.
@@ -74,9 +67,17 @@ impl ChromiumScreenshotter {
     /// Creates a new Chromium-based screenshotter.
     ///
     /// This launches a headless Chromium browser instance in the background.
-    pub async fn new() -> eyre::Result<ChromiumScreenshotter> {
+    pub async fn new(settings: &ScreenshotsTable) -> eyre::Result<ChromiumScreenshotter> {
+        let viewport = Viewport {
+            width: settings.width,
+            height: settings.height,
+            is_landscape: settings.width >= settings.height,
+            device_scale_factor: None,
+            emulating_mobile: false,
+            has_touch: false,
+        };
         let config = BrowserConfig::builder()
-            .viewport(VIEWPORT.clone())
+            .viewport(viewport)
             .arg("--hide-scrollbars")
             .build()
             .map_err(Report::msg)
@@ -98,7 +99,11 @@ impl ChromiumScreenshotter {
         let (jobs, receiver) = mpsc::unbounded_channel();
 
         // Spawn processor task
-        let processor = tokio::task::spawn(ChromiumScreenshotter::run(browser, receiver));
+        let processor = tokio::task::spawn(ChromiumScreenshotter::run(
+            browser,
+            receiver,
+            settings.settle_delay,
+        ));
 
         Ok(ChromiumScreenshotter {
             jobs,
@@ -111,9 +116,14 @@ impl ChromiumScreenshotter {
 
     /// Runs the processing loop which reads jobs from the queue and handles
     /// them using the browser.
-    async fn run(browser: Browser, mut receiver: mpsc::UnboundedReceiver<Job>) {
+    async fn run(
+        browser: Browser,
+        mut receiver: mpsc::UnboundedReceiver<Job>,
+        settle_delay: Duration,
+    ) {
         while let Some(job) = receiver.recv().await {
-            let result = ChromiumScreenshotter::capture_screenshot(&browser, job.site).await;
+            let result =
+                ChromiumScreenshotter::capture_screenshot(&browser, job.site, settle_delay).await;
             // We don't care if the caller is no longer waiting for the result
             let _ = job.result.send(result);
         }
@@ -121,12 +131,13 @@ impl ChromiumScreenshotter {
 
     /// Captures a screenshot for a single site.
     ///
-    /// Opens a new tab in the given browser, loads the given site, screenshots
-    /// it, and closes the tab when done.
+    /// Opens a new tab in the given browser, loads the given site, waits for
+    /// `settle_delay`, screenshots the site, and closes the tab when done.
     #[instrument]
     async fn capture_screenshot(
         browser: &Browser,
         site: Intern<Uri>,
+        settle_delay: Duration,
     ) -> eyre::Result<WebpScreenshotData> {
         let page_params = CreateTargetParams::builder()
             .url(site.to_string())
@@ -139,6 +150,8 @@ impl ChromiumScreenshotter {
                 .await
                 .wrap_err("timed out opening site in new browser page")?;
         let page = page_result.wrap_err("failed to create browser page")?;
+        // Allow async assets to load and render before capturing the page.
+        let () = tokio::time::sleep(settle_delay).await;
         let image_data_result = async {
             let screenshot_params = ScreenshotParams {
                 cdp_params: CaptureScreenshotParams {
@@ -192,6 +205,8 @@ mod tests {
     use axum::{Router, http::Uri, routing::get};
     use sarlacc::Intern;
 
+    use crate::config::ScreenshotsTable;
+
     use super::{ChromiumScreenshotter, Screenshotter};
 
     #[tokio::test]
@@ -207,7 +222,9 @@ mod tests {
             .await
             .unwrap();
         });
-        let screenshotter = ChromiumScreenshotter::new().await.unwrap();
+        let screenshotter = ChromiumScreenshotter::new(&ScreenshotsTable::default())
+            .await
+            .unwrap();
         let site = Intern::new(format!("http://{address}").parse::<Uri>().unwrap());
 
         let image = screenshotter.take_screenshot(site).await.unwrap();

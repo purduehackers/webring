@@ -47,8 +47,3 @@ pub trait Screenshotter: Debug + Send + Sync {
         site: Intern<Uri>,
     ) -> Pin<Box<dyn Future<Output = eyre::Result<WebpScreenshotData>> + Send + Sync + 'static>>;
 }
-
-/// Width for site screenshot images
-const WIDTH: u16 = 960;
-/// Height for site screenshot images
-const HEIGHT: u16 = 608;

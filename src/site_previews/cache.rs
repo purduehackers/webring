@@ -86,6 +86,8 @@ pub struct SitePreviewCache {
     cache_dir: PathBuf,
     /// Screenshotter used to take screenshots of sites
     screenshotter: Box<dyn Screenshotter>,
+    /// Generator used when no captured or cached screenshot is available
+    fallback_generator: FallbackImageGenerator,
     /// Set which tracks which sites are currently being revalidated. Used to
     /// deduplicate requests for revalidation.
     revalidating: Arc<HashSet<SitePreviewId>>,
@@ -111,8 +113,12 @@ impl SitePreviewCache {
             .wrap_err("failed to create screenshot cache directory")?;
         Ok(SitePreviewCache {
             cache_dir: config.webring.cache_dir.clone(),
-            revalidation_period: config.webring.preview_cache_duration,
+            revalidation_period: config.screenshots.cache_duration,
             screenshotter,
+            fallback_generator: FallbackImageGenerator::new(
+                config.screenshots.width,
+                config.screenshots.height,
+            ),
             revalidating: Arc::new(HashSet::new()),
         })
     }
@@ -176,7 +182,8 @@ impl SitePreviewCache {
         match maybe_preview {
             Some(preview) => preview,
             None => {
-                let image = FallbackImageGenerator
+                let image = self
+                    .fallback_generator
                     .take_screenshot(uri)
                     .await
                     .expect("fallback screenshotter failed");
@@ -238,7 +245,7 @@ mod tests {
     use tokio::{fs, time::timeout};
 
     use crate::{
-        config::{Config, WebringTable},
+        config::{Config, ScreenshotsTable, WebringTable},
         site_previews::{
             SitePreviewCache, SitePreviewId, TestScreenshotter,
             capture::{FallbackImageGenerator, Screenshotter},
@@ -253,7 +260,10 @@ mod tests {
             webring: WebringTable {
                 cache_dir: cache_dir.to_owned(),
                 static_dir: static_dir.to_owned(),
-                preview_cache_duration: cache_duration,
+                ..Default::default()
+            },
+            screenshots: ScreenshotsTable {
+                cache_duration,
                 ..Default::default()
             },
             ..Default::default()
@@ -331,7 +341,11 @@ mod tests {
         let (_temp_dir, cache, id, screenshotter) = make_cache(Duration::from_hours(1)).await;
 
         let first_preview = cache.get_preview(&id, *URI).await;
-        let expected_image = FallbackImageGenerator.take_screenshot(*URI).await.unwrap();
+        let settings = ScreenshotsTable::default();
+        let expected_image = FallbackImageGenerator::new(settings.width, settings.height)
+            .take_screenshot(*URI)
+            .await
+            .unwrap();
 
         // Should return placeholder with no cache duration
         assert_eq!(

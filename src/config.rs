@@ -52,6 +52,9 @@ pub struct Config {
     pub logging: LoggingTable,
     /// Discord integration configuration
     pub discord: Option<DiscordTable>,
+    /// Site screenshot configuration
+    #[serde(default)]
+    pub screenshots: ScreenshotsTable,
 
     /// Map from member name to their site details
     #[serde(default)]
@@ -78,13 +81,6 @@ pub struct WebringTable {
         deserialize_with = "deserialize_interned_uri"
     )]
     pub base_url: Intern<Uri>,
-
-    /// Length of time member screenshots may remain cached.
-    #[serde(
-        default = "default_preview_cache_duration",
-        deserialize_with = "duration_str::deserialize_duration"
-    )]
-    pub preview_cache_duration: Duration,
 }
 
 /// Returns the default static directory
@@ -103,12 +99,69 @@ impl Default for WebringTable {
             static_dir: default_static_dir(),
             cache_dir: default_cache_dir(),
             base_url: default_address(),
-            preview_cache_duration: default_preview_cache_duration(),
         }
     }
 }
 
 impl WebringTable {}
+
+/// Site screenshot configuration table
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ScreenshotsTable {
+    /// Width of captured and fallback screenshots, in pixels
+    #[serde(default = "default_screenshot_width")]
+    pub width: u32,
+
+    /// Height of captured and fallback screenshots, in pixels
+    #[serde(default = "default_screenshot_height")]
+    pub height: u32,
+
+    /// Time to wait for a page to settle after loading before capturing it
+    #[serde(
+        default = "default_screenshot_settle_delay",
+        deserialize_with = "duration_str::deserialize_duration"
+    )]
+    pub settle_delay: Duration,
+
+    /// Length of time screenshots may remain cached
+    #[serde(
+        default = "default_screenshot_cache_duration",
+        deserialize_with = "duration_str::deserialize_duration"
+    )]
+    pub cache_duration: Duration,
+}
+
+impl Default for ScreenshotsTable {
+    fn default() -> Self {
+        Self {
+            width: default_screenshot_width(),
+            height: default_screenshot_height(),
+            settle_delay: default_screenshot_settle_delay(),
+            cache_duration: default_screenshot_cache_duration(),
+        }
+    }
+}
+
+/// Get the default screenshot width
+const fn default_screenshot_width() -> u32 {
+    1280
+}
+
+/// Get the default screenshot height
+const fn default_screenshot_height() -> u32 {
+    808
+}
+
+/// Get the default settling delay before capturing a screenshot
+const fn default_screenshot_settle_delay() -> Duration {
+    Duration::from_secs(1)
+}
+
+/// Get the default screenshot cache duration
+const fn default_screenshot_cache_duration() -> Duration {
+    Duration::from_hours(6)
+}
 
 /// Network/server configuration table
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -246,11 +299,6 @@ where
     LevelFilterWrapper::deserialize(deserializer).map(LevelFilter::from)
 }
 
-/// Get the default preview cache duration
-fn default_preview_cache_duration() -> Duration {
-    Duration::from_hours(6)
-}
-
 /// Get default webring base address.
 fn default_address() -> Intern<Uri> {
     Intern::new(Uri::from_static(env!("CARGO_PKG_HOMEPAGE")))
@@ -299,6 +347,7 @@ impl Config {
             || old.network != new.network
             || old.logging != new.logging
             || old.discord != new.discord
+            || old.screenshots != new.screenshots
     }
 }
 
@@ -317,14 +366,13 @@ mod tests {
     use sarlacc::Intern;
     use tracing::level_filters::LevelFilter;
 
-    use crate::config::default_preview_cache_duration;
     use crate::{
         config::MemberSpec,
         discord::Snowflake,
         webring::{CheckLevel, EnrollmentStatus},
     };
 
-    use super::{Config, DiscordTable, LoggingTable, NetworkTable, WebringTable};
+    use super::{Config, DiscordTable, LoggingTable, NetworkTable, ScreenshotsTable, WebringTable};
 
     #[test]
     fn valid_config() {
@@ -351,7 +399,6 @@ mod tests {
             webring: WebringTable {
                 static_dir: PathBuf::from("static"),
                 cache_dir: PathBuf::from("cache"),
-                preview_cache_duration: default_preview_cache_duration(),
                 base_url: Intern::new(Uri::from_static("https://ring.purduehackers.com/")),
             },
             network: NetworkTable {
@@ -366,6 +413,7 @@ mod tests {
                 webhook_url: Url::parse("https://api.discord.com/webhook-or-something").unwrap(),
                 channel_id: Snowflake::new(1_234_567_890),
             }),
+            screenshots: ScreenshotsTable::default(),
             members: IndexMap::new(),
         };
         assert_eq!(expected, actual);
@@ -387,18 +435,29 @@ mod tests {
     }
 
     #[test]
-    fn configured_preview_cache_duration() {
+    fn configured_screenshots() {
         let config = indoc! { r#"
             [webring]
             static-dir = "static"
-            preview-cache-duration = "1h15m"
+
+            [screenshots]
+            width = 640
+            height = 404
+            settle-delay = "250ms"
+            cache-duration = "1h15m"
+
             [network]
             listen-addr = "0.0.0.0:3000"
         "# };
         let actual: Config = toml::from_str(config).unwrap();
         assert_eq!(
-            Duration::from_mins(75),
-            actual.webring.preview_cache_duration
+            ScreenshotsTable {
+                width: 640,
+                height: 404,
+                settle_delay: Duration::from_millis(250),
+                cache_duration: Duration::from_mins(75),
+            },
+            actual.screenshots
         );
     }
 
@@ -484,7 +543,7 @@ mod tests {
         let result = toml::from_str::<Config>(config);
         assert!(result.is_err());
         assert_eq!(
-            "unknown field `extra-field`, expected one of `static-dir`, `cache-dir`, `base-url`, `preview-cache-duration`",
+            "unknown field `extra-field`, expected one of `static-dir`, `cache-dir`, `base-url`",
             result.unwrap_err().message()
         );
     }

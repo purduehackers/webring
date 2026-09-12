@@ -65,24 +65,17 @@ happens:
 
 This table contains settings pertaining to the webring server.
 
-| Key                           | Required | Type              | Default                          |
-| ---                           | ---      | ---               | ---                              |
-| `base-url`                    | no       | string (URL)      | `https://ring.purduehackers.com` |
-| `static-dir`                  | yes      | string (path)     | `/usr/share/webring/static`      |
-| `preview-cache-duration`      | no       | string (duration) | `6h`                             |
+| Key          | Required | Type          | Default                          |
+| ---          | ---      | ---           | ---                              |
+| `base-url`   | no       | string (URL)  | `https://ring.purduehackers.com` |
+| `static-dir` | yes      | string (path) | `/usr/share/webring/static`      |
 
 Example:
 ```toml
 [webring]
 base-url = "https://ring.purduehackers.com"
 static-dir = "static"
-preview-cache-duration = "1h15m"
 ```
-
-#### `preview-cache-duration`
-
-The amount of time a preview screenshot will be cached for before being
-regenerated.
 
 #### `base-url`
 
@@ -109,6 +102,41 @@ Note that this path is relative to the working directory in which the webring is
 run, not necessarily relative to the location of the configuration file.
 However, it is recommended to run the webring in the directory containing the
 configuration file, so that there is no confusion about relative paths.
+
+### `screenshots` table
+
+Controls the capture and caching of site preview screenshots.
+
+| Key              | Required | Type               | Default |
+| ---              | ---      | ---                | ---     |
+| `width`          | no       | integer (pixels)   | `1280`  |
+| `height`         | no       | integer (pixels)   | `808`   |
+| `settle-delay`   | no       | string (duration)  | `1s`    |
+| `cache-duration` | no       | string (duration)  | `6h`    |
+
+Example:
+```toml
+[screenshots]
+width = 1280
+height = 808
+settle-delay = "1s"
+cache-duration = "1h15m"
+```
+
+#### `width` and `height`
+
+The viewport dimensions used for captured screenshots, in pixels. Generated
+fallback images use the same dimensions.
+
+#### `settle-delay`
+
+The amount of time to wait after a page loads before taking its screenshot.
+This gives asynchronously loaded assets time to render.
+
+#### `cache-duration`
+
+The amount of time a preview screenshot will be cached before being
+regenerated.
 
 ### `network` table
 

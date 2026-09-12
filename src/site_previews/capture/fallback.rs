@@ -37,9 +37,7 @@ use crate::site_previews::capture::{Screenshotter, WebpScreenshotData};
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-fn fallback_image(key: &impl Hash) -> WebpScreenshotData {
-    const WIDTH: u64 = super::WIDTH as u64;
-    const HEIGHT: u64 = super::HEIGHT as u64;
+fn fallback_image(key: &impl Hash, width: u32, height: u32) -> WebpScreenshotData {
     const CELL: u64 = 8;
     const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
@@ -56,15 +54,16 @@ fn fallback_image(key: &impl Hash) -> WebpScreenshotData {
     ];
     let phase = key_hash % 4;
     let reverse = key_hash & 1 == 1;
-    let mut pixels = Vec::with_capacity((WIDTH * HEIGHT * 3) as usize);
+    let mut pixels = Vec::with_capacity((width * height * 3) as usize);
 
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
+    for y in 0..u64::from(height) {
+        for x in 0..u64::from(width) {
             let cell_x = x / CELL;
             let cell_y = y / CELL;
             // Quantize the gradient to whole dither cells so no transition cuts
             // through a cell and creates half-pixels.
-            let vertical = cell_y as f32 / (HEIGHT / CELL - 1) as f32;
+            let vertical =
+                cell_y as f32 / (u64::from(height) / CELL).saturating_sub(1).max(1) as f32;
             let gradient = if reverse { vertical } else { 1.0 - vertical };
             let scaled = gradient * (palette.len() - 1) as f32;
             let lower = (scaled as usize).min(palette.len() - 1);
@@ -83,7 +82,7 @@ fn fallback_image(key: &impl Hash) -> WebpScreenshotData {
     }
 
     WebpScreenshotData(
-        Encoder::from_rgb(&pixels, WIDTH as u32, HEIGHT as u32)
+        Encoder::from_rgb(&pixels, width, height)
             .encode(90.0)
             .to_vec(),
     )
@@ -101,7 +100,19 @@ fn hsl_to_rgb(hue: f32, saturation: f32, lightness: f32) -> [u8; 3] {
 /// Generates fallback images for sites in case we don't have a screenshot image
 /// available to use.
 #[derive(Debug)]
-pub struct FallbackImageGenerator;
+pub struct FallbackImageGenerator {
+    /// Width of generated fallback images
+    width: u32,
+    /// Height of generated fallback images
+    height: u32,
+}
+
+impl FallbackImageGenerator {
+    /// Creates a fallback image generator with the given output dimensions.
+    pub fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
+}
 
 impl Screenshotter for FallbackImageGenerator {
     fn take_screenshot(
@@ -109,7 +120,11 @@ impl Screenshotter for FallbackImageGenerator {
         site: Intern<Uri>,
     ) -> Pin<Box<dyn Future<Output = eyre::Result<WebpScreenshotData>> + Send + Sync + 'static>>
     {
-        Box::pin(std::future::ready(Ok(fallback_image(&*site))))
+        Box::pin(std::future::ready(Ok(fallback_image(
+            &*site,
+            self.width,
+            self.height,
+        ))))
     }
 }
 
@@ -120,6 +135,7 @@ mod tests {
     use axum::http::Uri;
     use pretty_assertions::assert_ne;
     use sarlacc::Intern;
+    use webp::Decoder;
 
     use crate::site_previews::capture::Screenshotter;
 
@@ -129,23 +145,30 @@ mod tests {
     async fn placeholder_images_are_unique() {
         let uri1 = Intern::new(Uri::from_static("https://kasad.com"));
         let uri2 = Intern::new(Uri::from_static("https://amberzeng.com"));
+        let generator = FallbackImageGenerator::new(1280, 808);
         assert_ne!(
-            FallbackImageGenerator
-                .take_screenshot(uri1)
-                .await
-                .unwrap()
-                .0,
-            FallbackImageGenerator
-                .take_screenshot(uri2)
-                .await
-                .unwrap()
-                .0
+            generator.take_screenshot(uri1).await.unwrap().0,
+            generator.take_screenshot(uri2).await.unwrap().0
         );
+    }
+
+    #[tokio::test]
+    async fn placeholder_uses_configured_dimensions() {
+        let uri = Intern::new(Uri::from_static("https://example.com"));
+        let image = FallbackImageGenerator::new(64, 48)
+            .take_screenshot(uri)
+            .await
+            .unwrap();
+        let decoded = Decoder::new(&image.0).decode().unwrap();
+
+        assert_eq!(64, decoded.width());
+        assert_eq!(48, decoded.height());
     }
 
     #[tokio::test]
     #[ignore = "this test generates images in /tmp/images for manual inspection to guarantee the colors differ"]
     async fn dummy() {
+        let generator = FallbackImageGenerator::new(1280, 808);
         for domain in [
             "kasad.com",
             "ericswpark.com",
@@ -154,7 +177,7 @@ mod tests {
             "neels.page",
         ] {
             let uri = Intern::new(Uri::from_str(&format!("https://{domain}")).unwrap());
-            let image = FallbackImageGenerator.take_screenshot(uri).await.unwrap();
+            let image = generator.take_screenshot(uri).await.unwrap();
             let path = PathBuf::from(format!("/tmp/images/{domain}.webp"));
             tokio::fs::write(&path, &image.0).await.unwrap();
         }

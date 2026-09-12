@@ -18,6 +18,12 @@
 [webring]
 base-url = "https://ring.purduehackers.com"
 
+[screenshots]
+width = 1280
+height = 808
+settle-delay = "1s"
+cache-duration = "6h"
+
 [logging]
 verbosity = "info"
 
