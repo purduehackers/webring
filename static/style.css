@@ -478,10 +478,7 @@ main {
     visibility: hidden;
     pointer-events: none;
     transform: none;
-    transition:
-        opacity 150ms ease,
-        transform 150ms ease,
-        visibility 150ms ease;
+    transition: none;
 }
 
 .member-list-preview.is-visible {

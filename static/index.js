@@ -17,6 +17,71 @@ You should have received a copy of the GNU Affero General Public License along
 with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 */
 
+function initLogoAnimation() {
+    const logo = document.querySelector(".logo");
+    const image = logo?.querySelector("img");
+    if (!logo || !image || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        return;
+    }
+
+    const originalFrame = image.src;
+    const frames = [1, 2, 3, 4].map(
+        frame => `/static/frames/frame${frame}.svg`,
+    );
+    frames.forEach(src => {
+        const preload = new Image();
+        preload.src = src;
+    });
+
+    let timer;
+    let frame = 0;
+    let hovered = false;
+    let focused = false;
+
+    function stop() {
+        window.clearInterval(timer);
+        timer = undefined;
+        frame = 0;
+        image.src = originalFrame;
+    }
+
+    function start() {
+        if (timer) {
+            return;
+        }
+        image.src = frames[0];
+        timer = window.setInterval(() => {
+            frame = (frame + 1) % frames.length;
+            image.src = frames[frame];
+        }, 120);
+    }
+
+    function sync() {
+        if (hovered || focused) {
+            start();
+        } else {
+            stop();
+        }
+    }
+
+    logo.addEventListener("mouseenter", () => {
+        hovered = true;
+        sync();
+    });
+    logo.addEventListener("mouseleave", () => {
+        hovered = false;
+        sync();
+    });
+    logo.addEventListener("focusin", () => {
+        focused = true;
+        sync();
+    });
+    logo.addEventListener("focusout", () => {
+        focused = false;
+        sync();
+    });
+}
+
 function initOutboundLinkTracking() {
     document.querySelectorAll("a").forEach(link => {
         if (link.host !== window.location.host && !link.dataset.umamiEvent) {
@@ -35,13 +100,18 @@ function initListPreviewCursor() {
 
         document.body.appendChild(preview);
 
+        let previewSize;
+        let moveFrame;
+        let pendingPosition;
+
         function positionPreview(clientX, clientY) {
-            preview.style.position = "fixed";
-            preview.style.transform = "none";
+            if (!previewSize) {
+                const bounds = preview.getBoundingClientRect();
+                previewSize = { width: bounds.width, height: bounds.height };
+            }
 
             const gap = 12;
-            const width = preview.offsetWidth;
-            const height = preview.offsetHeight;
+            const { width, height } = previewSize;
             let left = clientX + gap;
             let top = clientY + gap;
 
@@ -61,7 +131,14 @@ function initListPreviewCursor() {
             if (event.pointerType && event.pointerType !== "mouse") {
                 return;
             }
-            positionPreview(event.clientX, event.clientY);
+            pendingPosition = [event.clientX, event.clientY];
+            if (moveFrame) {
+                return;
+            }
+            moveFrame = window.requestAnimationFrame(() => {
+                moveFrame = undefined;
+                positionPreview(...pendingPosition);
+            });
         }
 
         function showFocusedPreview() {
@@ -73,6 +150,10 @@ function initListPreviewCursor() {
         function hidePreview(event) {
             if (event.pointerType && event.pointerType !== "mouse") {
                 return;
+            }
+            if (moveFrame) {
+                window.cancelAnimationFrame(moveFrame);
+                moveFrame = undefined;
             }
             preview.classList.remove("is-visible");
         }
@@ -286,6 +367,7 @@ function initCarousel() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+    initLogoAnimation();
     initOutboundLinkTracking();
     initListPreviewCursor();
     initViewToggle();
