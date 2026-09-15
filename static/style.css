@@ -277,7 +277,9 @@ main {
     opacity: 0;
     pointer-events: none;
     transform: translate(-50%, -50%) scale(0.96);
-    transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+    transition:
+        transform 300ms cubic-bezier(0.2, 0, 0, 1),
+        opacity 140ms ease-out;
     user-select: none;
 }
 
@@ -303,6 +305,35 @@ main {
 
 .carousel-slide.is-next {
     transform: translate(calc(-50% + var(--side-shift)), -50%);
+}
+
+.carousel-slide.is-new-side-left,
+.carousel-slide.is-new-side-right {
+    transition: none;
+    opacity: 0;
+}
+
+.carousel-slide.is-new-side-left {
+    transform: translate(calc(-50% - var(--side-shift) - 100%), -50%);
+}
+
+.carousel-slide.is-new-side-right {
+    transform: translate(calc(-50% + var(--side-shift) + 100%), -50%);
+}
+
+.carousel-slide.is-exiting-left,
+.carousel-slide.is-exiting-right {
+    z-index: 1;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.carousel-slide.is-exiting-left {
+    transform: translate(calc(-50% - var(--side-shift) - 100%), -50%);
+}
+
+.carousel-slide.is-exiting-right {
+    transform: translate(calc(-50% + var(--side-shift) + 100%), -50%);
 }
 
 .carousel-slide.is-prev .preview-frame,

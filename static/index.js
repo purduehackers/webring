@@ -262,9 +262,19 @@ function initCarousel() {
         return slide.querySelector(".preview-frame")?.dataset.umamiEventName || "";
     }
 
-    function render() {
+    let exitTimer;
+    function render(exitingSlide, exitClass, enteringSlide, enteringClass) {
+        window.clearTimeout(exitTimer);
         slides.forEach((slide, index) => {
-            slide.classList.remove("is-current", "is-prev", "is-next");
+            slide.classList.remove(
+                "is-current",
+                "is-prev",
+                "is-next",
+                "is-exiting-left",
+                "is-exiting-right",
+                "is-new-side-left",
+                "is-new-side-right",
+            );
             if (index === current) {
                 slide.classList.add("is-current");
             } else if (index === (current - 1 + slides.length) % slides.length) {
@@ -277,16 +287,50 @@ function initCarousel() {
         if (nameLabel) {
             nameLabel.textContent = memberName(slides[current]);
         }
+
+        if (exitingSlide && exitClass) {
+            exitingSlide.classList.add(exitClass);
+            exitTimer = window.setTimeout(() => {
+                exitingSlide.classList.remove(exitClass);
+            }, 300);
+        }
+
+        if (enteringSlide && enteringClass) {
+            enteringSlide.classList.add(enteringClass);
+            window.requestAnimationFrame(() => {
+                window.requestAnimationFrame(() => {
+                    enteringSlide.classList.remove(enteringClass);
+                });
+            });
+        }
     }
 
     function showPrevious() {
+        const exitingSlide = slides[(current + 1) % slides.length];
+        const enteringSlide =
+            slides.length > 2
+                ? slides[(current - 2 + slides.length) % slides.length]
+                : null;
         current = (current - 1 + slides.length) % slides.length;
-        render();
+        render(
+            exitingSlide,
+            "is-exiting-right",
+            enteringSlide,
+            "is-new-side-left",
+        );
     }
 
     function showNext() {
+        const exitingSlide = slides[(current - 1 + slides.length) % slides.length];
+        const enteringSlide =
+            slides.length > 2 ? slides[(current + 2) % slides.length] : null;
         current = (current + 1) % slides.length;
-        render();
+        render(
+            exitingSlide,
+            "is-exiting-left",
+            enteringSlide,
+            "is-new-side-right",
+        );
     }
 
     const clickSound = new Audio("/static/click.mp3");
