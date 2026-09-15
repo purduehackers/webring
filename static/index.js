@@ -17,6 +17,71 @@ You should have received a copy of the GNU Affero General Public License along
 with the Purdue Hackers webring. If not, see <https://www.gnu.org/licenses/>.
 */
 
+function initLogoAnimation() {
+    const logo = document.querySelector(".logo");
+    const image = logo?.querySelector("img");
+    if (!logo || !image || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        return;
+    }
+
+    const originalFrame = image.src;
+    const frames = [1, 2, 3, 4].map(
+        frame => `/static/frames/frame${frame}.svg`,
+    );
+    frames.forEach(src => {
+        const preload = new Image();
+        preload.src = src;
+    });
+
+    let timer;
+    let frame = 0;
+    let hovered = false;
+    let focused = false;
+
+    function stop() {
+        window.clearInterval(timer);
+        timer = undefined;
+        frame = 0;
+        image.src = originalFrame;
+    }
+
+    function start() {
+        if (timer) {
+            return;
+        }
+        image.src = frames[0];
+        timer = window.setInterval(() => {
+            frame = (frame + 1) % frames.length;
+            image.src = frames[frame];
+        }, 120);
+    }
+
+    function sync() {
+        if (hovered || focused) {
+            start();
+        } else {
+            stop();
+        }
+    }
+
+    logo.addEventListener("mouseenter", () => {
+        hovered = true;
+        sync();
+    });
+    logo.addEventListener("mouseleave", () => {
+        hovered = false;
+        sync();
+    });
+    logo.addEventListener("focusin", () => {
+        focused = true;
+        sync();
+    });
+    logo.addEventListener("focusout", () => {
+        focused = false;
+        sync();
+    });
+}
+
 function initOutboundLinkTracking() {
     document.querySelectorAll("a").forEach(link => {
         if (link.host !== window.location.host && !link.dataset.umamiEvent) {
@@ -35,13 +100,18 @@ function initListPreviewCursor() {
 
         document.body.appendChild(preview);
 
+        let previewSize;
+        let moveFrame;
+        let pendingPosition;
+
         function positionPreview(clientX, clientY) {
-            preview.style.position = "fixed";
-            preview.style.transform = "none";
+            if (!previewSize) {
+                const bounds = preview.getBoundingClientRect();
+                previewSize = { width: bounds.width, height: bounds.height };
+            }
 
             const gap = 12;
-            const width = preview.offsetWidth;
-            const height = preview.offsetHeight;
+            const { width, height } = previewSize;
             let left = clientX + gap;
             let top = clientY + gap;
 
@@ -61,7 +131,14 @@ function initListPreviewCursor() {
             if (event.pointerType && event.pointerType !== "mouse") {
                 return;
             }
-            positionPreview(event.clientX, event.clientY);
+            pendingPosition = [event.clientX, event.clientY];
+            if (moveFrame) {
+                return;
+            }
+            moveFrame = window.requestAnimationFrame(() => {
+                moveFrame = undefined;
+                positionPreview(...pendingPosition);
+            });
         }
 
         function showFocusedPreview() {
@@ -73,6 +150,10 @@ function initListPreviewCursor() {
         function hidePreview(event) {
             if (event.pointerType && event.pointerType !== "mouse") {
                 return;
+            }
+            if (moveFrame) {
+                window.cancelAnimationFrame(moveFrame);
+                moveFrame = undefined;
             }
             preview.classList.remove("is-visible");
         }
@@ -181,9 +262,19 @@ function initCarousel() {
         return slide.querySelector(".preview-frame")?.dataset.umamiEventName || "";
     }
 
-    function render() {
+    let exitTimer;
+    function render(exitingSlide, exitClass, enteringSlide, enteringClass) {
+        window.clearTimeout(exitTimer);
         slides.forEach((slide, index) => {
-            slide.classList.remove("is-current", "is-prev", "is-next");
+            slide.classList.remove(
+                "is-current",
+                "is-prev",
+                "is-next",
+                "is-exiting-left",
+                "is-exiting-right",
+                "is-new-side-left",
+                "is-new-side-right",
+            );
             if (index === current) {
                 slide.classList.add("is-current");
             } else if (index === (current - 1 + slides.length) % slides.length) {
@@ -196,16 +287,50 @@ function initCarousel() {
         if (nameLabel) {
             nameLabel.textContent = memberName(slides[current]);
         }
+
+        if (exitingSlide && exitClass) {
+            exitingSlide.classList.add(exitClass);
+            exitTimer = window.setTimeout(() => {
+                exitingSlide.classList.remove(exitClass);
+            }, 300);
+        }
+
+        if (enteringSlide && enteringClass) {
+            enteringSlide.classList.add(enteringClass);
+            window.requestAnimationFrame(() => {
+                window.requestAnimationFrame(() => {
+                    enteringSlide.classList.remove(enteringClass);
+                });
+            });
+        }
     }
 
     function showPrevious() {
+        const exitingSlide = slides[(current + 1) % slides.length];
+        const enteringSlide =
+            slides.length > 2
+                ? slides[(current - 2 + slides.length) % slides.length]
+                : null;
         current = (current - 1 + slides.length) % slides.length;
-        render();
+        render(
+            exitingSlide,
+            "is-exiting-right",
+            enteringSlide,
+            "is-new-side-left",
+        );
     }
 
     function showNext() {
+        const exitingSlide = slides[(current - 1 + slides.length) % slides.length];
+        const enteringSlide =
+            slides.length > 2 ? slides[(current + 2) % slides.length] : null;
         current = (current + 1) % slides.length;
-        render();
+        render(
+            exitingSlide,
+            "is-exiting-left",
+            enteringSlide,
+            "is-new-side-right",
+        );
     }
 
     const clickSound = new Audio("/static/click.mp3");
@@ -286,6 +411,7 @@ function initCarousel() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+    initLogoAnimation();
     initOutboundLinkTracking();
     initListPreviewCursor();
     initViewToggle();
