@@ -1,5 +1,5 @@
-Host vulcan
-    Hostname vulcan.moe
-    Port 4225
-    User ring
+Host phack.sh
+    Hostname phack.sh
+    Port 10022
+    User p-webring
     IdentityFile ~/.ssh/id_ed25519

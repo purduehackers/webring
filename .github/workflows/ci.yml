@@ -255,13 +255,15 @@ jobs:
           echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
           chmod -R u=rwX,g=,o= ~/.ssh
 
-      - name: Copy container configuration to Vulcan
-        run: rsync -rv --mkpath ci/deploy/ vulcan:webring-data/
+      - name: Copy seccomp profile to phack.sh
+        run: |
+          rsync -rv ci/deploy/seccomp_profile.json phack.sh:
 
-      - name: Upgrade deployed container on Vulcan
+      - name: Upgrade deployed container on phack.sh
         env:
           WEBRING_IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
         run: >-
-          ssh vulcan
-          "cd webring-data &&
-          WEBRING_IMAGE_TAG='${WEBRING_IMAGE_TAG}' docker compose up --detach"
+          printf '[Container]\nImage=%s:%s\n' ghcr.io/purduehackers/webring "${WEBRING_IMAGE_TAG}"
+          | ssh phack.sh "cat > .config/containers/systemd/webring.container.d/image.conf
+          && systemctl --user daemon-reload
+          && systemctl --user restart webring.service"
