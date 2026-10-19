@@ -180,7 +180,7 @@ impl ChromiumScreenshotter {
     ///
     /// Opens a new tab in the given browser, loads the given site, waits for
     /// `settle_delay`, screenshots the site, and closes the tab when done.
-    #[instrument]
+    #[instrument(skip(browser))]
     async fn capture_screenshot(
         browser: &Browser,
         site: Intern<Uri>,
