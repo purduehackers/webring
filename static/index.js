@@ -367,7 +367,10 @@ function initCarousel() {
     carousel?.addEventListener(
         "wheel",
         event => {
-            if (!event.deltaY) {
+            const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
+                ? event.deltaX
+                : event.deltaY;
+            if (!delta) {
                 return;
             }
 
@@ -379,7 +382,7 @@ function initCarousel() {
             }
             lastWheelNav = now;
 
-            navigate(event.deltaY < 0 ? "previous" : "next");
+            navigate(delta < 0 ? "previous" : "next");
         },
         { passive: false },
     );
