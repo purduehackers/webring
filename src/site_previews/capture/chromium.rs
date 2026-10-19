@@ -36,9 +36,9 @@ use futures::StreamExt;
 use sarlacc::Intern;
 use tokio::{
     sync::{mpsc, oneshot},
-    task::AbortHandle,
+    task::{AbortHandle, JoinSet},
 };
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
     config::ScreenshotsTable,
@@ -55,19 +55,25 @@ struct Job {
 }
 
 /// Screenshotter which uses Chromium via [`chromiumoxide`].
+///
+/// A Chromium browser is launched on-demand when a screenshot is requested. It
+/// will be re-used for repeated screenshots, and is closed when 15 seconds pass
+/// during which no new screenshots are requested.
 #[derive(Debug)]
 pub struct ChromiumScreenshotter {
     /// Write end of channel used to submit jobs to the screenshot processor task.
     jobs: tokio::sync::mpsc::UnboundedSender<Job>,
-    /// Handles on the background tasks that are part of this screenshotter.
-    tasks: [AbortHandle; 2],
+    /// Handle to abort the screenshotter's background task.
+    task: AbortHandle,
 }
 
 impl ChromiumScreenshotter {
     /// Creates a new Chromium-based screenshotter.
     ///
-    /// This launches a headless Chromium browser instance in the background.
-    pub async fn new(settings: &ScreenshotsTable) -> eyre::Result<ChromiumScreenshotter> {
+    /// # Panics
+    ///
+    /// Panics if called from outside a Tokio runtime context.
+    pub fn new(settings: &ScreenshotsTable) -> eyre::Result<ChromiumScreenshotter> {
         let viewport = Viewport {
             width: settings.width,
             height: settings.height,
@@ -82,50 +88,91 @@ impl ChromiumScreenshotter {
             .build()
             .map_err(Report::msg)
             .wrap_err("failed to create browser configuration")?;
-        let (browser, handler) = Browser::launch(config)
-            .await
-            .wrap_err("failed to launch Chromium browser")?;
-
-        // Spawn event handler task
-        let browser_event_handler = tokio::task::spawn(async move {
-            let mut handler = handler;
-            while let Some(event) = handler.next().await {
-                if let Err(err) = event {
-                    error!(%err, "Chromium CDP error");
-                }
-            }
-        });
-
-        let (jobs, receiver) = mpsc::unbounded_channel();
 
         // Spawn processor task
-        let processor = tokio::task::spawn(ChromiumScreenshotter::run(
-            browser,
+        let (jobs, receiver) = mpsc::unbounded_channel();
+        let task = tokio::task::spawn(ChromiumScreenshotter::run(
+            config,
             receiver,
             settings.settle_delay,
         ));
 
         Ok(ChromiumScreenshotter {
             jobs,
-            tasks: [
-                browser_event_handler.abort_handle(),
-                processor.abort_handle(),
-            ],
+            task: task.abort_handle(),
         })
     }
 
     /// Runs the processing loop which reads jobs from the queue and handles
     /// them using the browser.
     async fn run(
-        browser: Browser,
+        config: BrowserConfig,
         mut receiver: mpsc::UnboundedReceiver<Job>,
         settle_delay: Duration,
     ) {
         while let Some(job) = receiver.recv().await {
-            let result =
-                ChromiumScreenshotter::capture_screenshot(&browser, job.site, settle_delay).await;
-            // We don't care if the caller is no longer waiting for the result
-            let _ = job.result.send(result);
+            debug!("spwaning Chromium browser");
+            match Browser::launch(config.clone()).await {
+                Err(err) => {
+                    let _ = job
+                        .result
+                        .send(Err(err).wrap_err("failed to launch Chromium browser"));
+                }
+                Ok((mut browser, handler)) => {
+                    // Spawn browser event handler. Uses a JoinSet so the task
+                    // is aborted when the parent task is dropped.
+                    let mut subtasks = JoinSet::new();
+                    subtasks.spawn(async move {
+                        let mut handler = handler;
+                        while let Some(event) = handler.next().await {
+                            if let Err(err) = event {
+                                error!(%err, "Chromium CDP error");
+                            }
+                        }
+                    });
+                    // Handle the job that caused us to spawn the browser
+                    let result =
+                        ChromiumScreenshotter::capture_screenshot(&browser, job.site, settle_delay)
+                            .await;
+                    // We don't care if the caller is no longer waiting for the result
+                    let _ = job.result.send(result);
+
+                    // Handle more jobs, stopping after no job appears for 15 seconds.
+                    while let Ok(Some(job)) =
+                        tokio::time::timeout(Duration::from_secs(15), receiver.recv()).await
+                    {
+                        let result = ChromiumScreenshotter::capture_screenshot(
+                            &browser,
+                            job.site,
+                            settle_delay,
+                        )
+                        .await;
+                        // We don't care if the caller is no longer waiting for the result
+                        let _ = job.result.send(result);
+                    }
+                    debug!("no new jobs for 15 seconds; closing browser");
+                    match tokio::time::timeout(Duration::from_secs(30), async {
+                        browser.close().await?;
+                        browser.wait().await?;
+                        eyre::Result::<()>::Ok(())
+                    })
+                    .await
+                    {
+                        Ok(Ok(())) => (),
+                        Ok(Err(err)) => {
+                            error!(err = %format_args!("{err:#}"), "error closing Chromium browser");
+                        }
+
+                        // Timeout reached
+                        Err(_) => {
+                            warn!(
+                                "Chromium browser didn't close after 30 seconds; killing forcefully"
+                            );
+                            browser.kill().await;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -193,10 +240,8 @@ impl Screenshotter for ChromiumScreenshotter {
 
 impl Drop for ChromiumScreenshotter {
     fn drop(&mut self) {
-        for task in &self.tasks {
-            task.abort();
-        }
-        // Since the tasks own the [Browser], it will be dropped when they abort.
+        self.task.abort();
+        // Since the task owns the [Browser], it will be dropped when they abort.
     }
 }
 
@@ -222,9 +267,7 @@ mod tests {
             .await
             .unwrap();
         });
-        let screenshotter = ChromiumScreenshotter::new(&ScreenshotsTable::default())
-            .await
-            .unwrap();
+        let screenshotter = ChromiumScreenshotter::new(&ScreenshotsTable::default()).unwrap();
         let site = Intern::new(format!("http://{address}").parse::<Uri>().unwrap());
 
         let image = screenshotter.take_screenshot(site).await.unwrap();

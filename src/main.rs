@@ -180,7 +180,7 @@ async fn async_main(cli: CliOptions, cfg: Arc<Config>) -> ExitCode {
     });
 
     // Create screenshotter and preview cache
-    let screenshotter = match ChromiumScreenshotter::new(&cfg.screenshots).await {
+    let screenshotter = match ChromiumScreenshotter::new(&cfg.screenshots) {
         Ok(screenshotter) => Box::new(screenshotter),
         Err(err) => {
             error!(%err, "failed to create Chromium screenshotter");
