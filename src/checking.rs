@@ -25,6 +25,7 @@ use lol_html::{
     send::{HtmlRewriter, Settings},
 };
 use std::{
+    borrow::Cow,
     fmt::{Display, Write as _},
     sync::{
         LazyLock, Mutex,
@@ -38,7 +39,7 @@ use axum::{
     http::{Uri, uri::Scheme},
 };
 use futures::{Stream, TryStreamExt};
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, Response, StatusCode, header::LOCATION, redirect::Policy};
 use sarlacc::Intern;
 use tokio::{sync::RwLock, time::Instant};
 use tracing::{error, info, instrument};
@@ -66,6 +67,7 @@ static CLIENT: LazyLock<Client> = LazyLock::new(|| {
             env!("CARGO_PKG_VERSION"),
             env!("CARGO_PKG_REPOSITORY")
         ))
+        .redirect(Policy::none())
         .timeout(REQUEST_TIMEOUT)
         .build()
         .expect("Creating the HTTP client should not fail")
@@ -228,8 +230,31 @@ async fn check_impl(
     mark_server_as_online().await;
     let successful_response = match response.error_for_status() {
         Ok(r) => r,
-        Err(err) => return Some(CheckFailure::ResponseStatus(err.status().unwrap())),
+        Err(err) => return Some(CheckFailure::ErrorResponse(err.status().unwrap())),
     };
+
+    // Check for redirects. The member's site URL should be the canonical URL
+    // for their site. If, for example, the member's URL is foo.github.io and
+    // that redirects to foo.com, when a visitor clicks the /next link on
+    // foo.com, the webring won't recognize the origin because it is expecting
+    // foo.github.io. In such cases, the member's site configuration should be
+    // updated to contain the canonical URL, so this check will catch that.
+    //
+    // We could be more specific and only fail the check if the redirect target
+    // has a different host than the URL we requested, but in general we'd like
+    // to avoid non-canonical URLs anyways (e.g. http:// -> https:// every time
+    // someone visits one of the ring sites).
+    if successful_response.status().is_redirection() {
+        let location = successful_response
+            .headers()
+            .get(LOCATION)
+            .and_then(|location| location.to_str().ok())
+            .map(str::to_owned);
+        return Some(CheckFailure::Redirect {
+            from: website.clone(),
+            to: location,
+        });
+    }
 
     if check_level == CheckLevel::ForLinks {
         let stream = successful_response.bytes_stream();
@@ -247,8 +272,15 @@ async fn check_impl(
 pub enum CheckFailure {
     /// Failed to connect to the server
     Connection(reqwest::Error),
-    /// Site returned a non-2xx response
-    ResponseStatus(StatusCode),
+    /// Site returned an error response
+    ErrorResponse(StatusCode),
+    /// Site returned a redirect response
+    Redirect {
+        /// URI that returned a redirect
+        from: Uri,
+        /// Value of the [LOCATION] header, if present and valid UTF-8
+        to: Option<String>,
+    },
     /// Site returned a successful response but has issues with its webring links
     LinkIssues(LinkStatuses),
     /// IO error
@@ -264,7 +296,7 @@ impl CheckFailure {
     pub fn to_message(&self, discord_channel_id: Snowflake) -> String {
         match self {
             CheckFailure::Connection(err) => format!("Connection to your site failed: {err}"),
-            CheckFailure::ResponseStatus(status_code) => {
+            CheckFailure::ErrorResponse(status_code) => {
                 let mut msg = format!(
                     "Your site returned an error response: {}",
                     status_code.as_u16()
@@ -273,6 +305,19 @@ impl CheckFailure {
                     write!(&mut msg, " ({description})").unwrap();
                 }
                 msg
+            }
+            CheckFailure::Redirect { from, to } => {
+                let to_msg = match to {
+                    None => Cow::Borrowed(""),
+                    Some(location) => Cow::Owned(format!(" to <{location}>")),
+                };
+                format!(
+                    concat!(
+                        "Your site (<{}>) returned a redirect{}.\n",
+                        "Your webring URL should be the canonical URL. If you've moved your site, please update your webring URL."
+                    ),
+                    from, to_msg
+                )
             }
             CheckFailure::LinkIssues(issues) => issues.to_message(discord_channel_id),
             CheckFailure::IOError(err) => {
@@ -288,9 +333,11 @@ impl CheckFailure {
     fn should_be_retried(&self) -> bool {
         match self {
             CheckFailure::IOError(_)
-            | CheckFailure::ResponseStatus(_)
+            | CheckFailure::ErrorResponse(_)
             | CheckFailure::Connection(_) => true,
-            CheckFailure::ParsingError(_) | CheckFailure::LinkIssues(_) => false,
+            CheckFailure::ParsingError(_)
+            | CheckFailure::LinkIssues(_)
+            | CheckFailure::Redirect { .. } => false,
         }
     }
 }
@@ -301,9 +348,14 @@ impl Display for CheckFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CheckFailure::Connection(error) => write!(f, "Connection error: {error}"),
-            CheckFailure::ResponseStatus(status_code) => {
+            CheckFailure::ErrorResponse(status_code) => {
                 write!(f, "Site returned {}", status_to_string(*status_code))
             }
+            CheckFailure::Redirect { from: _, to: None } => write!(f, "Site returned redirect"),
+            CheckFailure::Redirect {
+                from: _,
+                to: Some(location),
+            } => write!(f, "Site returned redirect to {location}"),
             CheckFailure::LinkIssues(links) => links.fmt(f),
             CheckFailure::IOError(e) => e.fmt(f),
             CheckFailure::ParsingError(e) => e.fmt(f),
@@ -592,7 +644,7 @@ mod tests {
         Router,
         body::{Body, Bytes},
         http::Uri,
-        response::{Html, Response},
+        response::{Html, Redirect, Response},
         routing::get,
     };
     use futures::stream::{self, iter};
@@ -942,6 +994,10 @@ mod tests {
                         let status = StatusCode::from_u16(rand::random_range(400..600)).unwrap();
                         (status, "Uh oh :(")
                     }),
+                )
+                .route(
+                    "/redirect",
+                    get(async || Redirect::to("http://127.0.0.1:32750/links")),
                 );
             axum::serve(listener, router).await.unwrap();
         });
@@ -959,12 +1015,17 @@ mod tests {
             (
                 Uri::from_static("http://127.0.0.1:32750/error"),
                 vec![CheckLevel::None],
-                |failure| matches!(failure, CheckFailure::ResponseStatus(_)),
+                |failure| matches!(failure, CheckFailure::ErrorResponse(_)),
             ),
             (
                 Uri::from_static("http://127.0.0.1:32750/up"),
                 vec![CheckLevel::None, CheckLevel::JustOnline],
                 |failure| matches!(failure, CheckFailure::LinkIssues(_)),
+            ),
+            (
+                Uri::from_static("http://127.0.0.1:32750/redirect"),
+                vec![CheckLevel::None],
+                |failure| matches!(failure, CheckFailure::Redirect { .. }),
             ),
             (
                 Uri::from_static("http://127.0.0.1:32750/links"),
