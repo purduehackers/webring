@@ -267,3 +267,4 @@ jobs:
           | ssh phack.sh "cat > .config/containers/systemd/webring.container.d/image.conf
           && systemctl --user daemon-reload
           && systemctl --user restart webring.service"
+          && podman image prune -a -f
